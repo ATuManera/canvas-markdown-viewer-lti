@@ -11,6 +11,7 @@ import {
   truncateAll,
   uniqueBinding,
 } from '../helpers/db.ts';
+import { expectPublicJwk, privateParametersIn } from '../helpers/jwk.ts';
 import { randomBytes } from 'node:crypto';
 
 const suite = hasDatabase ? describe : describe.skip;
@@ -427,12 +428,17 @@ suite('tool keys', () => {
     const key = await ensureToolKey(pool, keyRing);
 
     expect(key.kid).toBeTruthy();
-    expect(key.publicJwk.kty).toBe('RSA');
-    expect(key.publicJwk.alg).toBe('RS256');
-    expect(key.publicJwk.use).toBe('sig');
-    // A private RSA JWK carries `d`; the published one must not.
-    expect(key.publicJwk).not.toHaveProperty('d');
+    expectPublicJwk(key.publicJwk);
     expect((await publishedKeys(pool)).map((k) => k.kid)).toContain(key.kid);
+  });
+
+  it('publishes none of the private parameters RFC 7518 defines', async () => {
+    const { ensureToolKey, publishedKeys } = await import('../../src/lti/tool-keys.ts');
+    await ensureToolKey(pool, testKeyRing());
+
+    for (const jwk of await publishedKeys(pool)) {
+      expect(privateParametersIn(jwk)).toEqual([]);
+    }
   });
 
   it('reuses the key it already has', async () => {

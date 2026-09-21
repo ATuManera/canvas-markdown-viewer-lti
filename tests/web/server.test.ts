@@ -9,6 +9,7 @@ import { buildServer } from '../../src/web/server.ts';
 import { SessionCodec } from '../../src/web/session.ts';
 import { frameAncestorsFor, contentSecurityPolicy } from '../../src/web/security-headers.ts';
 import { hasDatabase, setupDatabase, truncateAll } from '../helpers/db.ts';
+import { expectPublicJwkSet, PRIVATE_JWK_PARAMETERS, privateParametersIn } from '../helpers/jwk.ts';
 import {
   buildPlatform,
   CLIENT_ID,
@@ -517,6 +518,72 @@ suite('the viewer', () => {
     expect(response.headers['cache-control']).toContain('no-store');
     expect(response.headers['referrer-policy']).toBe('no-referrer');
     expect(response.headers['x-content-type-options']).toBe('nosniff');
+  });
+});
+
+suite('the published JWK Set', () => {
+  it('serves a well-formed key set', async () => {
+    const response = await app.inject({ method: 'GET', url: '/lti/jwks' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+
+    const keys = expectPublicJwkSet(response.json());
+    expect(keys).toHaveLength(1);
+  });
+
+  it('publishes no private parameter, checked structurally rather than by substring', async () => {
+    const response = await app.inject({ method: 'GET', url: '/lti/jwks' });
+    const body = response.json<{ keys: unknown[] }>();
+
+    for (const key of body.keys) {
+      expect(privateParametersIn(key)).toEqual([]);
+    }
+  });
+
+  it('would catch a private parameter if one were ever added', async () => {
+    // Guards the guard: the same assertion applied to a key that does carry private
+    // material must fail, otherwise the test above proves nothing.
+    const response = await app.inject({ method: 'GET', url: '/lti/jwks' });
+    const key = response.json<{ keys: Record<string, unknown>[] }>().keys[0]!;
+
+    for (const parameter of PRIVATE_JWK_PARAMETERS) {
+      const leaked = { ...key, [parameter]: 'private-material' };
+      expect(privateParametersIn(leaked)).toEqual([parameter]);
+    }
+  });
+
+  it('is cacheable, but only briefly, so a rotation propagates', async () => {
+    const response = await app.inject({ method: 'GET', url: '/lti/jwks' });
+    const cacheControl = String(response.headers['cache-control']);
+
+    expect(cacheControl).toContain('public');
+    const maxAge = Number(/max-age=(\d+)/.exec(cacheControl)?.[1] ?? 0);
+    expect(maxAge).toBeGreaterThan(0);
+    expect(maxAge).toBeLessThanOrEqual(600);
+  });
+
+  it('is the key Canvas would verify a launch against', async () => {
+    // The published key must be the public half of the pair the tool actually holds.
+    const { importJWK, SignJWT, jwtVerify } = await import('jose');
+    const { ensureToolKey, loadPrivateKey } = await import('../../src/lti/tool-keys.ts');
+
+    const response = await app.inject({ method: 'GET', url: '/lti/jwks' });
+    const published = response.json<{ keys: Record<string, unknown>[] }>().keys[0]!;
+
+    const key = await ensureToolKey(pool, config.keyRing);
+    const privateKey = await loadPrivateKey(pool, config.keyRing, String(published['kid']));
+    expect(privateKey).toBeDefined();
+    expect(published['kid']).toBe(key.kid);
+
+    const token = await new SignJWT({ probe: true })
+      .setProtectedHeader({ alg: 'RS256', kid: key.kid })
+      .setIssuedAt()
+      .setExpirationTime('1m')
+      .sign(privateKey!);
+
+    const verified = await jwtVerify(token, await importJWK(published, 'RS256'));
+    expect(verified.payload['probe']).toBe(true);
   });
 });
 

@@ -123,9 +123,11 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
     logger: false,
     trustProxy: config.TRUST_PROXY,
     bodyLimit: 128 * 1024,
-    // Canvas is the only caller and sends well-formed requests; a generous header limit
-    // only widens the surface.
-    maxParamLength: 256,
+    routerOptions: {
+      // Canvas is the only caller and sends well-formed requests; a generous parameter
+      // limit only widens the surface.
+      maxParamLength: 256,
+    },
   });
 
   await app.register(formbody);
@@ -222,6 +224,11 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
    * editing the developer key by hand.
    */
   app.get(ROUTES.jwks, async (_request, reply) => {
+    // `ensureToolKey` is idempotent and returns immediately once a key exists. Calling it
+    // here rather than relying on start-up alone means this endpoint can never answer with
+    // an empty key set — which would make every launch unverifiable for as long as Canvas
+    // cached it.
+    await ensureToolKey(pool, config.keyRing);
     const keys = await publishedKeys(pool);
     return reply
       .headers({

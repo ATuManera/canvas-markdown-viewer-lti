@@ -176,10 +176,25 @@ jobs:
             if [ "$i" = "30" ]; then docker logs ci-app; exit 1; fi
           done
 
-          # The JWK Set must be published and must never contain a private key.
-          jwks=$(curl -fsS http://127.0.0.1:3000/lti/jwks)
-          echo "$jwks" | grep -q '"kty":"RSA"'
-          echo "$jwks" | grep -qv '"d":'
+          # The JWK Set must be published and must carry no private key material.
+          # Parsed rather than grepped: "d" occurs inside base64url modulus values and
+          # inside kid UUIDs, so a substring search both misses leaks and raises false ones.
+          curl -fsS http://127.0.0.1:3000/lti/jwks > /tmp/jwks.json
+          node -e '
+            const set = JSON.parse(require("fs").readFileSync("/tmp/jwks.json", "utf8"));
+            if (Object.keys(set).join() !== "keys") throw new Error("unexpected top-level fields");
+            if (!Array.isArray(set.keys) || set.keys.length === 0) throw new Error("no keys published");
+            const forbidden = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+            for (const jwk of set.keys) {
+              if (jwk.kty !== "RSA") throw new Error("unexpected key type: " + jwk.kty);
+              for (const name of ["n", "e", "kid"]) {
+                if (typeof jwk[name] !== "string") throw new Error("missing " + name);
+              }
+              const leaked = forbidden.filter((name) => Object.hasOwn(jwk, name));
+              if (leaked.length > 0) throw new Error("private parameters published: " + leaked.join());
+            }
+            console.log("jwks: " + set.keys.length + " public key(s), no private parameters");
+          '
 
           # The static assets are served, and the login endpoint answers a launch.
           curl -fsS http://127.0.0.1:3000/assets/viewer.css > /dev/null
