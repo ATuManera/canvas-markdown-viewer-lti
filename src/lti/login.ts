@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Platform, PlatformRegistry } from '../config/platforms.ts';
 import { LaunchError } from './errors.ts';
+import { usesPlatformStorage } from './platform-storage.ts';
 import type { LaunchStateStore } from './state-store.ts';
 
 /**
@@ -18,12 +19,25 @@ export interface LoginRequest {
   readonly lti_message_hint?: string | undefined;
   readonly client_id?: string | undefined;
   readonly lti_deployment_id?: string | undefined;
+  /**
+   * Canvas's signal that LTI Platform Storage is available, and the name of the frame to
+   * address. Absent means the tool must fall back to cookies
+   * (`doc/api/lti_launch_overview.md`, "Launching without Cookies").
+   */
+  readonly lti_storage_target?: string | undefined;
 }
 
 export interface LoginResult {
   readonly redirectUrl: string;
   readonly state: string;
   readonly platform: Platform;
+  /** The frame to address for Platform Storage, or undefined when it is unavailable. */
+  readonly storageTarget: string | undefined;
+  /**
+   * Origin the Platform Storage messages must target. The specification requires the
+   * platform's OIDC authorization origin, which is not always the Canvas domain.
+   */
+  readonly authorizationOrigin: string;
 }
 
 export interface LoginOptions {
@@ -87,7 +101,15 @@ export async function beginLogin(
     url.searchParams.set('lti_message_hint', request.lti_message_hint);
   }
 
-  return { redirectUrl: url.toString(), state, platform };
+  return {
+    redirectUrl: url.toString(),
+    state,
+    platform,
+    storageTarget: usesPlatformStorage(request.lti_storage_target)
+      ? request.lti_storage_target
+      : undefined,
+    authorizationOrigin: new URL(platform.authorizationEndpoint).origin,
+  };
 }
 
 /**

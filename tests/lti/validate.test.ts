@@ -538,3 +538,50 @@ describe('error messages', () => {
     expect(error.code).not.toContain(' ');
   });
 });
+
+describe('beginLogin — Platform Storage', () => {
+  it('reports the frame Canvas named, so the relay page can address it', async () => {
+    const result = await beginLogin(
+      {
+        iss: ISSUER,
+        login_hint: 'u',
+        client_id: CLIENT_ID,
+        lti_storage_target: 'post_message_forwarding',
+      },
+      { registry, store, redirectUri: REDIRECT_URI },
+    );
+
+    expect(result.storageTarget).toBe('post_message_forwarding');
+  });
+
+  it('reports no target when Canvas does not offer Platform Storage', async () => {
+    const result = await beginLogin(
+      { iss: ISSUER, login_hint: 'u', client_id: CLIENT_ID },
+      { registry, store, redirectUri: REDIRECT_URI },
+    );
+
+    expect(result.storageTarget).toBeUndefined();
+  });
+
+  it('accepts the specification default of _parent', async () => {
+    const result = await beginLogin(
+      { iss: ISSUER, login_hint: 'u', client_id: CLIENT_ID, lti_storage_target: '_parent' },
+      { registry, store, redirectUri: REDIRECT_URI },
+    );
+
+    expect(result.storageTarget).toBe('_parent');
+  });
+
+  it('reports the authorization origin, which may differ from the issuer host', async () => {
+    const hosted = buildPlatform({
+      clientId: 'hosted-tool',
+      authorizationEndpoint: 'https://sso.canvaslms.com/api/lti/authorize_redirect',
+    });
+    const result = await beginLogin(
+      { iss: ISSUER, login_hint: 'u', client_id: 'hosted-tool' },
+      { registry: buildRegistry(platform, hosted), store, redirectUri: REDIRECT_URI },
+    );
+
+    expect(result.authorizationOrigin).toBe('https://sso.canvaslms.com');
+  });
+});
