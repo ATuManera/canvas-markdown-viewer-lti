@@ -1,6 +1,11 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FetchDenied, SafeFetcher, type SafeFetchOptions } from '../../src/canvas/safe-fetch.ts';
+import {
+  FetchDenied,
+  SafeFetcher,
+  validateHop,
+  type SafeFetchOptions,
+} from '../../src/canvas/safe-fetch.ts';
 
 /**
  * These tests run a real HTTP server on loopback. `allowPrivateAddresses` is therefore on
@@ -39,7 +44,7 @@ afterEach(async () => {
 
 function fetcher(overrides: Partial<SafeFetchOptions> = {}): SafeFetcher {
   return new SafeFetcher({
-    allowedHosts: ['localhost'],
+    originHosts: ['localhost'],
     maxRedirects: 3,
     timeoutMs: 2_000,
     maxBytes: 1_000,
@@ -74,16 +79,17 @@ describe('SafeFetcher — the happy path', () => {
     expect(response.redirects).toEqual([]);
   });
 
-  it('forwards the Authorization header the caller supplies', async () => {
+  it('sends the bearer credential to the authorized origin', async () => {
     let seen: string | undefined;
     const { origin } = await startServer((req, res) => {
       seen = req.headers.authorization;
       res.end('ok');
     });
 
-    await fetcher().fetch(`${origin}/x`, { headers: { authorization: 'Bearer test-token' } });
+    const response = await fetcher().fetch(`${origin}/x`, { bearerToken: 'test-token' });
 
     expect(seen).toBe('Bearer test-token');
+    expect(response.bearerSent).toBe(true);
   });
 
   it('follows a redirect within the allowlist and reports the hops', async () => {
@@ -132,7 +138,7 @@ describe('SafeFetcher — SSRF defences', () => {
 
   it('refuses the cloud metadata endpoint', async () => {
     const strict = new SafeFetcher({
-      allowedHosts: ['169.254.169.254'],
+      originHosts: ['169.254.169.254'],
       maxRedirects: 0,
       timeoutMs: 500,
       maxBytes: 1_000,
@@ -143,7 +149,7 @@ describe('SafeFetcher — SSRF defences', () => {
 
   it('refuses an RFC1918 destination', async () => {
     const strict = new SafeFetcher({
-      allowedHosts: ['10.1.2.3'],
+      originHosts: ['10.1.2.3'],
       maxRedirects: 0,
       timeoutMs: 500,
       maxBytes: 1_000,
@@ -183,7 +189,7 @@ describe('SafeFetcher — SSRF defences', () => {
     // The first hop resolves through a permissive fetcher; the redirect target is then
     // rejected by a fetcher that does not allow private addresses.
     const strict = new SafeFetcher({
-      allowedHosts: ['localhost'],
+      originHosts: ['localhost'],
       maxRedirects: 2,
       timeoutMs: 2_000,
       maxBytes: 1_000,
@@ -272,5 +278,210 @@ describe('SafeFetcher — resource limits', () => {
     const error = await expectDenied(fetcher().fetch(`${origin}/denied`), 'http_error');
     expect(error.status).toBe(403);
     expect(error.message).not.toContain('detailed internal explanation');
+  });
+});
+
+describe('SafeFetcher — the bearer credential never crosses an origin', () => {
+  /**
+   * The download may end on a Canvas files domain or on object storage. Those hosts must
+   * never see the user's Canvas API token: the redirect they were sent by already carries
+   * whatever authorisation they need.
+   */
+  it('drops the Authorization header when a redirect changes the host', async () => {
+    const storage = await startServer((req, res) => {
+      storageSawAuthorization = req.headers.authorization;
+      res.end('# stored content');
+    });
+    let storageSawAuthorization: string | undefined;
+
+    const canvas = await startServer((req, res) => {
+      canvasSawAuthorization = req.headers.authorization;
+      res.writeHead(302, { location: `http://127.0.0.1:${storage.port}/blob` });
+      res.end();
+    });
+    let canvasSawAuthorization: string | undefined;
+
+    const response = await new SafeFetcher({
+      originHosts: ['localhost'],
+      redirectHosts: ['127.0.0.1'],
+      maxRedirects: 2,
+      timeoutMs: 2_000,
+      maxBytes: 1_000,
+      allowInsecureScheme: true,
+      allowPrivateAddresses: true,
+    }).fetch(`${canvas.origin}/courses/1/files/2/download`, { bearerToken: 'user-token' });
+
+    expect(canvasSawAuthorization).toBe('Bearer user-token');
+    expect(storageSawAuthorization).toBeUndefined();
+    expect(response.bearerSent).toBe(false);
+    expect(response.body.toString()).toBe('# stored content');
+  });
+
+  it('drops the credential when only the port changes', async () => {
+    const second = await startServer((req, res) => {
+      secondSaw = req.headers.authorization;
+      res.end('ok');
+    });
+    let secondSaw: string | undefined;
+
+    const first = await startServer((_req, res) => {
+      res.writeHead(302, { location: `http://localhost:${second.port}/next` });
+      res.end();
+    });
+
+    const response = await fetcher().fetch(`${first.origin}/start`, { bearerToken: 'user-token' });
+
+    expect(secondSaw).toBeUndefined();
+    expect(response.bearerSent).toBe(false);
+  });
+
+  it('keeps the credential across a same-origin redirect', async () => {
+    const seen: (string | undefined)[] = [];
+    const { origin } = await startServer((req, res) => {
+      seen.push(req.headers.authorization);
+      if (req.url === '/start') {
+        res.writeHead(302, { location: '/final' });
+        res.end();
+        return;
+      }
+      res.end('ok');
+    });
+
+    const response = await fetcher().fetch(`${origin}/start`, { bearerToken: 'user-token' });
+
+    expect(seen).toEqual(['Bearer user-token', 'Bearer user-token']);
+    expect(response.bearerSent).toBe(true);
+  });
+
+  it('refuses to leak a credential a caller smuggled in through headers', async () => {
+    const storage = await startServer((req, res) => {
+      storageSaw = req.headers.authorization;
+      res.end('ok');
+    });
+    let storageSaw: string | undefined;
+
+    const canvas = await startServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${storage.port}/blob` });
+      res.end();
+    });
+
+    await new SafeFetcher({
+      originHosts: ['localhost'],
+      redirectHosts: ['127.0.0.1'],
+      maxRedirects: 2,
+      timeoutMs: 2_000,
+      maxBytes: 1_000,
+      allowInsecureScheme: true,
+      allowPrivateAddresses: true,
+    }).fetch(`${canvas.origin}/start`, { headers: { authorization: 'Bearer smuggled' } });
+
+    expect(storageSaw).toBeUndefined();
+  });
+});
+
+describe('SafeFetcher — origin and redirect allowlists are separate', () => {
+  it('refuses an initial request to a storage host, however well-known', async () => {
+    const { port } = await startServer((_req, res) => res.end('ok'));
+    const strict = new SafeFetcher({
+      originHosts: ['localhost'],
+      redirectHosts: ['127.0.0.1'],
+      maxRedirects: 2,
+      timeoutMs: 2_000,
+      maxBytes: 1_000,
+      allowInsecureScheme: true,
+      allowPrivateAddresses: true,
+    });
+
+    const error = await expectDenied(
+      strict.fetch(`http://127.0.0.1:${port}/blob`),
+      'host_not_allowed',
+    );
+    expect(error.detail).toContain('not an authorized Canvas host');
+  });
+
+  it('reaches a storage host only as the consequence of a Canvas redirect', async () => {
+    const storage = await startServer((_req, res) => res.end('# stored'));
+    const canvas = await startServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${storage.port}/blob` });
+      res.end();
+    });
+
+    const response = await new SafeFetcher({
+      originHosts: ['localhost'],
+      redirectHosts: ['127.0.0.1'],
+      maxRedirects: 2,
+      timeoutMs: 2_000,
+      maxBytes: 1_000,
+      allowInsecureScheme: true,
+      allowPrivateAddresses: true,
+    }).fetch(`${canvas.origin}/download`);
+
+    expect(response.body.toString()).toBe('# stored');
+  });
+
+  it('records each hop with its query string removed', async () => {
+    const { origin } = await startServer((req, res) => {
+      if (req.url?.startsWith('/start')) {
+        res.writeHead(302, { location: '/final' });
+        res.end();
+        return;
+      }
+      res.end('ok');
+    });
+
+    const response = await fetcher().fetch(`${origin}/start?verifier=super-secret`);
+
+    expect(response.redirects[0]).toContain('/start');
+    expect(response.redirects[0]).not.toContain('super-secret');
+    expect(response.redirects[0]).toContain('[redacted]');
+  });
+});
+
+describe('validateHop — protocol downgrade', () => {
+  const options = {
+    originHosts: ['canvas.example.edu'],
+    redirectHosts: ['files.example.edu'],
+    maxRedirects: 2,
+    timeoutMs: 500,
+    maxBytes: 1_000,
+    allowInsecureScheme: true,
+  } as const;
+
+  it('refuses a redirect from https down to http', () => {
+    expect(() =>
+      validateHop(
+        'http://files.example.edu/blob',
+        { firstHop: false, previous: new URL('https://canvas.example.edu/download') },
+        options,
+      ),
+    ).toThrow(/protocol_downgrade/);
+  });
+
+  it('allows a redirect that stays on https', () => {
+    const url = validateHop(
+      'https://files.example.edu/blob',
+      { firstHop: false, previous: new URL('https://canvas.example.edu/download') },
+      options,
+    );
+    expect(url.toString()).toBe('https://files.example.edu/blob');
+  });
+
+  it('refuses plain http outright when the insecure scheme is not permitted', () => {
+    expect(() =>
+      validateHop(
+        'http://canvas.example.edu/x',
+        { firstHop: true },
+        {
+          ...options,
+          allowInsecureScheme: false,
+        },
+      ),
+    ).toThrow(/insecure_scheme/);
+  });
+
+  it('keeps the first hop confined to the Canvas origin', () => {
+    expect(() =>
+      validateHop('https://files.example.edu/blob', { firstHop: true }, options),
+    ).toThrow(/host_not_allowed/);
   });
 });

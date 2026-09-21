@@ -29,6 +29,7 @@ const resolveHost = promisify(dnsLookup);
 
 export type FetchDenialReason =
   | 'insecure_scheme'
+  | 'protocol_downgrade'
   | 'host_not_allowed'
   | 'private_address'
   | 'dns_failure'
@@ -54,8 +55,17 @@ export class FetchDenied extends Error {
 }
 
 export interface SafeFetchOptions {
-  /** Hostnames, optionally `*.`-prefixed, that may be contacted. */
-  readonly allowedHosts: readonly string[];
+  /**
+   * Hosts the FIRST request may address. In practice this is the authorized Canvas origin
+   * for the launch. A URL supplied by a user never reaches this client: the only way to
+   * arrive at external storage is a redirect issued by one of these hosts.
+   */
+  readonly originHosts: readonly string[];
+  /**
+   * Additional hosts a redirect may lead to — a separate Canvas files domain, or object
+   * storage. They are reachable only as the consequence of a redirect, never directly.
+   */
+  readonly redirectHosts?: readonly string[];
   readonly maxRedirects: number;
   readonly timeoutMs: number;
   readonly maxBytes: number;
@@ -78,10 +88,20 @@ export interface SafeResponse {
   readonly body: Buffer;
   /** The URL the body was finally read from, after any redirects. */
   readonly finalUrl: string;
+  readonly finalOrigin: string;
+  /** Whether the bearer credential survived to the final hop. */
+  readonly bearerSent: boolean;
+  /** Each hop, with query strings removed: they may carry signatures or verifiers. */
   readonly redirects: readonly string[];
 }
 
 export interface SafeRequestInit {
+  /**
+   * Bearer token for the Canvas API. It is attached **only** while the request stays on
+   * the same origin as the initial URL. The moment a redirect changes scheme, host or
+   * port, the credential is dropped — object storage must never see the user's token.
+   */
+  readonly bearerToken?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly method?: 'GET' | 'HEAD';
 }
@@ -93,24 +113,32 @@ export class SafeFetcher {
 
   async fetch(url: string, init: SafeRequestInit = {}): Promise<SafeResponse> {
     const redirects: string[] = [];
-    let current = url;
+    const origin = this.validateUrl(url, { firstHop: true });
+    let current = origin;
+    let bearerDropped = false;
 
     for (let hop = 0; hop <= this.options.maxRedirects; hop += 1) {
-      const target = this.validateUrl(current);
-      const addresses = await this.resolveAndCheck(target.hostname);
-      const response = await this.send(target, addresses, init);
+      const addresses = await this.resolveAndCheck(current.hostname);
+      const sameOrigin = current.origin === origin.origin;
+      if (!sameOrigin) bearerDropped = true;
 
-      const location = response.headers.location;
+      const response = await this.send(current, addresses, init, sameOrigin);
+
       if (REDIRECT_STATUSES.has(response.statusCode ?? 0)) {
-        response.resume(); // discard the redirect body
+        response.resume(); // the redirect body is never read
+        const location = response.headers.location;
         if (!location) {
           throw new FetchDenied(
             'redirect_without_location',
             `status ${response.statusCode ?? 0} carried no Location`,
           );
         }
-        redirects.push(current);
-        current = new URL(location, target).toString();
+        redirects.push(redactUrl(current));
+        const next = this.validateUrl(new URL(location, current).toString(), {
+          firstHop: false,
+          previous: current,
+        });
+        current = next;
         continue;
       }
 
@@ -125,7 +153,9 @@ export class SafeFetcher {
         status,
         headers: response.headers,
         body,
-        finalUrl: target.toString(),
+        finalUrl: current.toString(),
+        finalOrigin: current.origin,
+        bearerSent: init.bearerToken !== undefined && !bearerDropped,
         redirects,
       };
     }
@@ -133,28 +163,8 @@ export class SafeFetcher {
     throw new FetchDenied('too_many_redirects', `exceeded ${this.options.maxRedirects} redirects`);
   }
 
-  private validateUrl(raw: string): URL {
-    let url: URL;
-    try {
-      url = new URL(raw);
-    } catch {
-      throw new FetchDenied('network_error', 'malformed URL');
-    }
-
-    if (url.username !== '' || url.password !== '') {
-      throw new FetchDenied('credentials_in_url', 'URL carries embedded credentials');
-    }
-
-    const httpsOnly = !this.options.allowInsecureScheme;
-    if (url.protocol !== 'https:' && (httpsOnly || url.protocol !== 'http:')) {
-      throw new FetchDenied('insecure_scheme', `scheme ${url.protocol} is not permitted`);
-    }
-
-    if (!hostAllowed(url.hostname, this.options.allowedHosts)) {
-      throw new FetchDenied('host_not_allowed', `host ${url.hostname} is not on the allowlist`);
-    }
-
-    return url;
+  private validateUrl(raw: string, hop: HopContext): URL {
+    return validateHop(raw, hop, this.options);
   }
 
   private async resolveAndCheck(hostname: string): Promise<LookupAddress[]> {
@@ -187,15 +197,25 @@ export class SafeFetcher {
     url: URL,
     addresses: readonly LookupAddress[],
     init: SafeRequestInit,
+    attachCredential: boolean,
   ): Promise<IncomingMessage> {
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const headers: Record<string, string> = { ...init.headers, host: url.host };
+    if (init.bearerToken !== undefined && attachCredential) {
+      headers['authorization'] = `Bearer ${init.bearerToken}`;
+    } else {
+      // Defensive: a caller that puts the credential in `headers` by hand must not be able
+      // to leak it across an origin change either.
+      delete headers['authorization'];
+      delete headers['Authorization'];
+    }
 
     return new Promise<IncomingMessage>((resolve, reject) => {
       const req = send(
         url,
         {
           method: init.method ?? 'GET',
-          headers: { ...init.headers, host: url.host },
+          headers,
           // The socket connects only to addresses that were just validated, so a second
           // DNS answer cannot be substituted between the check and the connection.
           // `net` asks for either one address or the whole list, depending on `opts.all`.
@@ -280,6 +300,70 @@ function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
       first.family,
     );
   }) as unknown as LookupFunction;
+}
+
+/**
+ * Renders a URL for logs and diagnostics with the query string removed. Canvas download
+ * URLs may carry `verifier`, `sf_verifier` or a storage signature, none of which belong in
+ * a log line.
+ */
+export interface HopContext {
+  /** True for the request the caller made; false for anything reached via a redirect. */
+  readonly firstHop: boolean;
+  /** The URL that redirected here, when there was one. */
+  readonly previous?: URL;
+}
+
+/**
+ * Validates one hop. Exported so the rules can be exercised directly, including the
+ * https-to-http downgrade rule, which a plain-HTTP test server cannot reproduce.
+ */
+export function validateHop(raw: string, hop: HopContext, options: SafeFetchOptions): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new FetchDenied('network_error', 'malformed URL');
+  }
+
+  if (url.username !== '' || url.password !== '') {
+    throw new FetchDenied('credentials_in_url', 'URL carries embedded credentials');
+  }
+
+  const httpsOnly = !options.allowInsecureScheme;
+  if (url.protocol !== 'https:' && (httpsOnly || url.protocol !== 'http:')) {
+    throw new FetchDenied('insecure_scheme', `scheme ${url.protocol} is not permitted`);
+  }
+
+  // A redirect may never take the exchange from https down to http, even where plain http
+  // is otherwise tolerated for local development.
+  if (hop.previous?.protocol === 'https:' && url.protocol !== 'https:') {
+    throw new FetchDenied('protocol_downgrade', 'redirect attempted to downgrade to http');
+  }
+
+  const allowed = hop.firstHop
+    ? options.originHosts
+    : [...options.originHosts, ...(options.redirectHosts ?? [])];
+
+  if (!hostAllowed(url.hostname, allowed)) {
+    throw new FetchDenied(
+      'host_not_allowed',
+      hop.firstHop
+        ? `initial request to ${url.hostname}, which is not an authorized Canvas host`
+        : `redirect to ${url.hostname}, which is not on the allowlist`,
+    );
+  }
+
+  return url;
+}
+
+export function redactUrl(url: URL | string): string {
+  try {
+    const parsed = typeof url === 'string' ? new URL(url) : url;
+    return `${parsed.origin}${parsed.pathname}${parsed.search ? '?[redacted]' : ''}`;
+  } catch {
+    return '[unparseable url]';
+  }
 }
 
 function describeError(error: unknown): string {
