@@ -1,0 +1,74 @@
+# Docker Compose for canvas-markdown-viewer-lti.
+#
+# This file runs the viewer and its PostgreSQL. It does NOT terminate TLS: put a
+# reverse proxy in front of it and give that proxy a valid certificate. See
+# docs/installation/canvas-self-hosted.md.
+
+services:
+  app:
+    build: .
+    image: canvas-markdown-viewer-lti:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://cmv:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/cmv
+      HOST: 0.0.0.0
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Bound to loopback: the reverse proxy reaches it, the internet does not.
+      - '127.0.0.1:3000:3000'
+    # The application writes nothing to disk, so the filesystem can be read-only.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          # Rendering is CPU-bound and bounded by MAX_MARKDOWN_NODES; jsdom is the
+          # largest consumer of memory. These suit a few hundred users; measure
+          # before changing them.
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cmv
+      POSTGRES_DB: cmv
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cmv -d cmv']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Not published: only the application talks to it.
+    expose:
+      - '5432'
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  db-data:

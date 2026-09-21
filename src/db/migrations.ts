@@ -72,6 +72,21 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX canvas_tokens_key_version_idx ON canvas_tokens (key_version);
     `,
   },
+  {
+    id: '0002_tool_keys',
+    sql: /* sql */ `
+      -- The tool's own key pair, published as a JWK Set. Canvas will not accept a
+      -- developer key without one, even for a tool that calls no LTI Advantage service.
+      CREATE TABLE tool_keys (
+        kid            TEXT PRIMARY KEY,
+        sealed_private TEXT NOT NULL,
+        public_jwk     TEXT NOT NULL,
+        active         BOOLEAN NOT NULL DEFAULT true,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX tool_keys_active_idx ON tool_keys (active, created_at DESC);
+    `,
+  },
 ];
 
 const ADVISORY_LOCK_KEY = 8_271_553_019_447_216n % 9_223_372_036_854_775_807n;

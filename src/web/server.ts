@@ -17,6 +17,7 @@ import { LaunchError } from '../lti/errors.ts';
 import { beginLogin, type LoginRequest } from '../lti/login.ts';
 import { PostgresLaunchStateStore } from '../lti/pg-state-store.ts';
 import { renderLaunchVerification, renderLoginRelay } from '../lti/platform-storage.ts';
+import { ensureToolKey, publishedKeys } from '../lti/tool-keys.ts';
 import { validateLaunch } from '../lti/validate.ts';
 import { createLogger, type Logger } from '../logging/logger.ts';
 import { renderMarkdown, RenderRefused } from '../markdown/render.ts';
@@ -47,6 +48,7 @@ import { SESSION_COOKIE, SessionCodec, SessionError, type Session } from './sess
 
 const ROUTES = {
   health: '/healthz',
+  jwks: '/lti/jwks',
   login: '/lti/login',
   launch: '/lti/launch',
   start: '/app/start',
@@ -82,6 +84,8 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
 
   const pool = options.pool ?? createPool({ connectionString: config.DATABASE_URL });
   await migrate(pool);
+
+  await ensureToolKey(pool, config.keyRing);
 
   const states = new PostgresLaunchStateStore(pool);
   const tokens = new TokenStore(pool, config.keyRing);
@@ -210,6 +214,24 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
         .headers({ 'cache-control': 'no-store' })
         .send({ status: 'degraded' });
     }
+  });
+
+  /**
+   * The tool's JWK Set. Canvas fetches it when a developer key names
+   * `public_jwk_url`, which is how a key rotation reaches Canvas without anyone
+   * editing the developer key by hand.
+   */
+  app.get(ROUTES.jwks, async (_request, reply) => {
+    const keys = await publishedKeys(pool);
+    return reply
+      .headers({
+        // Short enough that a rotation propagates quickly, long enough that Canvas is
+        // not asked on every launch.
+        'cache-control': 'public, max-age=300, must-revalidate',
+        'x-content-type-options': 'nosniff',
+      })
+      .type('application/json; charset=utf-8')
+      .send({ keys });
   });
 
   // ---- LTI login ---------------------------------------------------------

@@ -418,3 +418,60 @@ suite('TokenStore — key rotation', () => {
     );
   });
 });
+
+suite('tool keys', () => {
+  it('generates a key pair on first use and publishes only the public half', async () => {
+    const { ensureToolKey, publishedKeys } = await import('../../src/lti/tool-keys.ts');
+    const keyRing = testKeyRing();
+
+    const key = await ensureToolKey(pool, keyRing);
+
+    expect(key.kid).toBeTruthy();
+    expect(key.publicJwk.kty).toBe('RSA');
+    expect(key.publicJwk.alg).toBe('RS256');
+    expect(key.publicJwk.use).toBe('sig');
+    // A private RSA JWK carries `d`; the published one must not.
+    expect(key.publicJwk).not.toHaveProperty('d');
+    expect((await publishedKeys(pool)).map((k) => k.kid)).toContain(key.kid);
+  });
+
+  it('reuses the key it already has', async () => {
+    const { ensureToolKey } = await import('../../src/lti/tool-keys.ts');
+    const keyRing = testKeyRing();
+
+    const first = await ensureToolKey(pool, keyRing);
+    const second = await ensureToolKey(pool, keyRing);
+
+    expect(second.kid).toBe(first.kid);
+  });
+
+  it('never stores the private key in the clear', async () => {
+    const { ensureToolKey } = await import('../../src/lti/tool-keys.ts');
+    await ensureToolKey(pool, testKeyRing());
+
+    const { rows } = await pool.query<{ sealed_private: string }>(
+      'SELECT sealed_private FROM tool_keys',
+    );
+    expect(rows[0]?.sealed_private).not.toContain('BEGIN PRIVATE KEY');
+    expect(rows[0]?.sealed_private.startsWith('v1.')).toBe(true);
+  });
+
+  it('stores a real, usable pair rather than a placeholder', async () => {
+    const { ensureToolKey, loadPrivateKey } = await import('../../src/lti/tool-keys.ts');
+    const { SignJWT, jwtVerify, importJWK } = await import('jose');
+    const keyRing = testKeyRing();
+
+    const key = await ensureToolKey(pool, keyRing);
+    const privateKey = await loadPrivateKey(pool, keyRing, key.kid);
+    expect(privateKey).toBeDefined();
+
+    const token = await new SignJWT({ probe: true })
+      .setProtectedHeader({ alg: 'RS256', kid: key.kid })
+      .setIssuedAt()
+      .setExpirationTime('1m')
+      .sign(privateKey!);
+
+    const verified = await jwtVerify(token, await importJWK(key.publicJwk, 'RS256'));
+    expect(verified.payload['probe']).toBe(true);
+  });
+});

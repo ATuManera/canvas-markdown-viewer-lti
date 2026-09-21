@@ -35,7 +35,7 @@ export async function setupDatabase(schema: string): Promise<DbPool> {
 }
 
 export async function truncateAll(pool: DbPool): Promise<void> {
-  await pool.query('TRUNCATE launch_states, used_nonces, oauth_flows, canvas_tokens');
+  await pool.query('TRUNCATE launch_states, used_nonces, oauth_flows, canvas_tokens, tool_keys');
 }
 
 export function testKeyRing(...versions: string[]): KeyRing {
