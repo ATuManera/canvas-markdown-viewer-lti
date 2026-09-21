@@ -17,7 +17,7 @@ function env(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     PUBLIC_URL: 'https://md.example.edu',
     DATABASE_URL: 'postgres://user:pw@localhost:5432/md',
-    ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+    ENCRYPTION_KEYS: `1:${Buffer.alloc(32, 7).toString('base64')}`,
     STATE_SECRET: 'x'.repeat(48),
     CANVAS_PLATFORMS: JSON.stringify([PLATFORM]),
     ...overrides,
@@ -38,15 +38,45 @@ describe('loadConfig', () => {
     expect(config.publicUrl.host).toBe('md.example.edu');
   });
 
-  it('decodes the encryption key to exactly 32 bytes', () => {
+  it('builds a key ring with the configured key', () => {
     const config = loadConfig(env());
-    expect(config.ENCRYPTION_KEY).toBeInstanceOf(Buffer);
-    expect(config.ENCRYPTION_KEY.length).toBe(32);
+    expect(config.keyRing.versions).toEqual(['1']);
+    expect(config.keyRing.activeVersion).toBe('1');
+  });
+
+  it('accepts several keys and makes the last one active by default', () => {
+    const config = loadConfig(
+      env({
+        ENCRYPTION_KEYS: `1:${Buffer.alloc(32, 1).toString('base64')},2:${Buffer.alloc(32, 2).toString('base64')}`,
+      }),
+    );
+    expect(config.keyRing.versions).toEqual(['1', '2']);
+    expect(config.keyRing.activeVersion).toBe('2');
+  });
+
+  it('honours an explicit active key, so a rotation can be staged', () => {
+    const config = loadConfig(
+      env({
+        ENCRYPTION_KEYS: `1:${Buffer.alloc(32, 1).toString('base64')},2:${Buffer.alloc(32, 2).toString('base64')}`,
+        ENCRYPTION_ACTIVE_KEY: '1',
+      }),
+    );
+    expect(config.keyRing.activeVersion).toBe('1');
+  });
+
+  it('rejects an active key that is not in the ring', () => {
+    expect(() => loadConfig(env({ ENCRYPTION_ACTIVE_KEY: '9' }))).toThrow(/not in the key ring/);
   });
 
   it('rejects an encryption key of the wrong length', () => {
-    expect(() => loadConfig(env({ ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') }))).toThrow(
-      ConfigError,
+    expect(() =>
+      loadConfig(env({ ENCRYPTION_KEYS: `1:${Buffer.alloc(16).toString('base64')}` })),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects a key entry that is not "version:key"', () => {
+    expect(() => loadConfig(env({ ENCRYPTION_KEYS: Buffer.alloc(32).toString('base64') }))).toThrow(
+      /version:base64key/,
     );
   });
 
@@ -67,7 +97,7 @@ describe('loadConfig', () => {
 
   it('reports every problem at once', () => {
     try {
-      loadConfig(env({ STATE_SECRET: 'short', ENCRYPTION_KEY: 'AAAA' }));
+      loadConfig(env({ STATE_SECRET: 'short', ENCRYPTION_KEYS: '1:AAAA' }));
       expect.unreachable('should have thrown');
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigError);

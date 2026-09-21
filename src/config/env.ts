@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { KeyRing, type KeyRingEntry } from '../crypto/envelope.ts';
 import { PlatformRegistry, platformsSchema, type Platform } from './platforms.ts';
 
 /**
@@ -12,23 +13,47 @@ const booleanish = z
 
 const bytes = z.coerce.number().int().positive();
 
-/** 32 bytes, base64 or base64url, for AES-256-GCM. */
-const encryptionKey = z.string().transform((value, ctx) => {
-  let buffer: Buffer;
-  try {
-    buffer = Buffer.from(value, 'base64');
-  } catch {
-    ctx.addIssue({ code: 'custom', message: 'must be base64-encoded' });
+/**
+ * One or more AES-256-GCM keys, as `version:base64key`, comma-separated. Several keys may
+ * be present at once so a rotation can introduce a new key while rows sealed under the old
+ * one stay readable.
+ *
+ *   ENCRYPTION_KEYS="1:Base64Of32Bytes,2:Base64Of32Bytes"
+ *   ENCRYPTION_ACTIVE_KEY="2"
+ */
+const encryptionKeys = z.string().transform((value, ctx) => {
+  const entries: KeyRingEntry[] = [];
+
+  for (const [index, raw] of value.split(',').entries()) {
+    const chunk = raw.trim();
+    if (chunk === '') continue;
+
+    const separator = chunk.indexOf(':');
+    if (separator <= 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `entry ${index + 1} must be "version:base64key"`,
+      });
+      return z.NEVER;
+    }
+
+    const version = chunk.slice(0, separator).trim();
+    const key = Buffer.from(chunk.slice(separator + 1).trim(), 'base64');
+    if (key.length !== 32) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `key "${version}" must decode to exactly 32 bytes, got ${key.length}`,
+      });
+      return z.NEVER;
+    }
+    entries.push({ version, key });
+  }
+
+  if (entries.length === 0) {
+    ctx.addIssue({ code: 'custom', message: 'at least one key is required' });
     return z.NEVER;
   }
-  if (buffer.length !== 32) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `must decode to exactly 32 bytes, got ${buffer.length}`,
-    });
-    return z.NEVER;
-  }
-  return buffer;
+  return entries;
 });
 
 const baseEnvSchema = z.object({
@@ -46,8 +71,11 @@ const baseEnvSchema = z.object({
 
   DATABASE_URL: z.string().min(1),
 
-  /** Key for AES-256-GCM encryption of stored refresh tokens. */
-  ENCRYPTION_KEY: encryptionKey,
+  /** Keys for AES-256-GCM encryption of stored refresh tokens. See {@link encryptionKeys}. */
+  ENCRYPTION_KEYS: encryptionKeys,
+
+  /** Which key seals new values. Defaults to the last entry of ENCRYPTION_KEYS. */
+  ENCRYPTION_ACTIVE_KEY: z.string().min(1).optional(),
 
   /** Key used to sign the short-lived state that ties an OAuth2 callback to its launch. */
   STATE_SECRET: z.string().min(32),
@@ -109,6 +137,18 @@ const envSchema = baseEnvSchema.strict().transform((raw, ctx) => {
     return z.NEVER;
   }
 
+  let keyRing: KeyRing;
+  try {
+    keyRing = new KeyRing(raw.ENCRYPTION_KEYS, raw.ENCRYPTION_ACTIVE_KEY);
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['ENCRYPTION_ACTIVE_KEY'],
+      message: error instanceof Error ? error.message : 'invalid key ring',
+    });
+    return z.NEVER;
+  }
+
   if (raw.NODE_ENV === 'production' && new URL(raw.PUBLIC_URL).protocol !== 'https:') {
     ctx.addIssue({
       code: 'custom',
@@ -120,12 +160,13 @@ const envSchema = baseEnvSchema.strict().transform((raw, ctx) => {
 
   const rest: Omit<typeof raw, 'CANVAS_PLATFORMS'> & { CANVAS_PLATFORMS?: string } = { ...raw };
   delete rest.CANVAS_PLATFORMS;
-  return { ...rest, platforms: platforms.data };
+  return { ...rest, platforms: platforms.data, keyRing };
 });
 
 export type Config = Omit<z.infer<typeof envSchema>, 'platforms'> & {
   readonly platforms: readonly Platform[];
   readonly platformRegistry: PlatformRegistry;
+  readonly keyRing: KeyRing;
   readonly publicUrl: URL;
 };
 
@@ -154,11 +195,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
-  const { platforms, ...rest } = result.data;
+  const { platforms, keyRing, ...rest } = result.data;
   return Object.freeze({
     ...rest,
     platforms: Object.freeze(platforms),
     platformRegistry: new PlatformRegistry(platforms),
+    keyRing,
     publicUrl: new URL(rest.PUBLIC_URL),
   });
 }
