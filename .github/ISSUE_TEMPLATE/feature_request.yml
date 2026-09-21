@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest something the tool should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read [`docs/roadmap.md`](../blob/main/docs/roadmap.md) first: some things are
+        deliberately out of scope, and the reasons are written down there.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the tool makes hard today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have already tried or considered
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Does this fit the project's constraints?
+      options:
+        - label: It does not require modifying Canvas LMS
+        - label: It does not require a write scope on Canvas
+        - label: It does not require storing document content
+        - label: It does not require executing content from a document

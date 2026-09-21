@@ -26,7 +26,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "licenses": "node scripts/licenses.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

@@ -1,0 +1,77 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a security problem here.** Use a private advisory instead — see
+        [SECURITY.md](../blob/main/SECURITY.md).
+
+        **Never paste** a token, a `client_secret`, an encryption key, a student's name, or
+        the content of a real course document.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Upload a .md file to a course
+        2. Open the ⋮ menu
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: tool-version
+    attributes:
+      label: Version of this tool
+      placeholder: 'v0.1.0, or the commit hash'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: canvas-type
+    attributes:
+      label: Canvas
+      options:
+        - Self-hosted
+        - Instructure-hosted
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: canvas-version
+    attributes:
+      label: Canvas version
+      description: From /api/v1/accounts/self/terms_of_service, or the release note you are on.
+
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      multiple: true
+      options:
+        - Chrome / Edge
+        - Safari
+        - Firefox
+        - Mobile browser
+        - Canvas mobile app
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        From `docker compose logs app`, including the support reference shown on the error
+        page. The logs are designed never to contain secrets — but read them before pasting.
+      render: text

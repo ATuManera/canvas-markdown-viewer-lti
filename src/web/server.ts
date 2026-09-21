@@ -491,7 +491,10 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
       const platform = platformFor(session);
 
       if (!session.canvasCourseId) {
-        return await html(reply, renderErrorPage({ context, message: context.messages.errorNoCourse }));
+        return await html(
+          reply,
+          renderErrorPage({ context, message: context.messages.errorNoCourse }),
+        );
       }
 
       const accessToken = await oauth.getAccessToken(platform, session);

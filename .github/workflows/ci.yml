@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A weekly run catches a dependency that became vulnerable without anyone touching
+  # the code.
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  verify:
+    name: Lint, types, tests, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: cmv_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d cmv_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # `npm ci` installs exactly what the lockfile says, and fails if package.json and
+      # the lockfile disagree. That is what makes the install reproducible.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:coverage
+        env:
+          TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/cmv_test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the build output runs
+        run: |
+          test -f dist/index.js
+          node --input-type=module -e "import('./dist/config/env.js').then(() => console.log('dist loads'))"
+
+  licences:
+    name: Dependency licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      # Fails on any copyleft, source-available or undeclared licence in the runtime tree.
+      - name: Check runtime licences
+        run: npm run licenses
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      # Production dependencies are what ships; a vulnerability there is a release blocker.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=low
+
+      # Development dependencies matter less but are still reported.
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs the history to scan commits, not just the working tree.
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  container:
+    name: Container build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: canvas-markdown-viewer-lti:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name ci-db \
+            -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=cmv_test \
+            -p 5432:5432 postgres:17-alpine
+          for i in $(seq 1 30); do
+            docker exec ci-db pg_isready -U test -d cmv_test && break
+            sleep 2
+          done
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+
+          docker run -d --name ci-app --network host \
+            -e NODE_ENV=production \
+            -e PUBLIC_URL=https://markdown.example.edu \
+            -e DATABASE_URL=postgres://test:test@127.0.0.1:5432/cmv_test \
+            -e ENCRYPTION_KEYS="1:$(head -c 32 /dev/urandom | base64 -w0)" \
+            -e STATE_SECRET="$(head -c 48 /dev/urandom | base64 -w0)" \
+            -e CANVAS_PLATFORMS='[{"issuer":"https://canvas.example.edu","clientId":"1","deploymentIds":["1:a"],"authorizationEndpoint":"https://canvas.example.edu/api/lti/authorize_redirect","jwksUri":"https://canvas.example.edu/api/lti/security/jwks","apiBaseUrl":"https://canvas.example.edu","apiClientId":"2","apiClientSecret":"placeholder"}]' \
+            canvas-markdown-viewer-lti:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz | grep -q '"ok"'; then
+              echo "health check passed"
+              break
+            fi
+            sleep 2
+            if [ "$i" = "30" ]; then docker logs ci-app; exit 1; fi
+          done
+
+          # The JWK Set must be published and must never contain a private key.
+          jwks=$(curl -fsS http://127.0.0.1:3000/lti/jwks)
+          echo "$jwks" | grep -q '"kty":"RSA"'
+          echo "$jwks" | grep -qv '"d":'
+
+          # The static assets are served, and the login endpoint answers a launch.
+          curl -fsS http://127.0.0.1:3000/assets/viewer.css > /dev/null
+          curl -fsS -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:3000/lti/login \
+            -d 'iss=https://canvas.example.edu&login_hint=u&client_id=1' | grep -q '302'
+
+          # The container runs as an unprivileged user.
+          test "$(docker exec ci-app id -u)" != "0"
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs ci-app || true

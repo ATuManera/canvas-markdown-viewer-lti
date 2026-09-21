@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { exportJWK, exportPKCS8, generateKeyPair, importPKCS8, type JWK, type KeyObject } from 'jose';
+import {
+  exportJWK,
+  exportPKCS8,
+  generateKeyPair,
+  importPKCS8,
+  type JWK,
+  type KeyObject,
+} from 'jose';
 import { open, seal, type KeyRing } from '../crypto/envelope.ts';
 import type { DbPool } from '../db/pool.ts';
 
