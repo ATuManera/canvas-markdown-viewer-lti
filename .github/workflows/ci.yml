@@ -122,6 +122,9 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The repository config extends the default rules and narrowly allowlists
+          # documentation placeholders; see .gitleaks.toml.
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   container:
     name: Container build and smoke test

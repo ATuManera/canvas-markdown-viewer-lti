@@ -1,0 +1,46 @@
+# gitleaks configuration.
+#
+# The default rules are extended, never replaced, so every detector stays on. The
+# allowlist below is deliberately narrow: each entry names the exact placeholder or the
+# exact quoted source line it excuses, and is confined to documentation paths. A real
+# credential in any of these files would still be reported.
+#
+# Re-run after changing this file:
+#   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect \
+#     --source=/repo --config=/repo/.gitleaks.toml --no-banner --redact -v
+
+[extend]
+useDefault = true
+
+[[rules]]
+# A duplicate of the default rule, narrowed so the allowlist below applies to it.
+id = "generic-api-key"
+description = "Generic API key"
+regex = '''(?i)(?:key|api|token|secret|client|passwd|password|auth|access)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\||:|<=|=>|:=|\?=)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{10,150})(?:['|\"|\n|\r|\s|\x60|;|\\]|$)'''
+entropy = 3.5
+keywords = ["key", "api", "token", "secret", "client", "passwd", "password", "auth", "access"]
+
+[allowlist]
+description = "Documentation placeholders and quoted Canvas source"
+
+# Match against the whole line, not just the captured group: these are placeholders and
+# quoted source lines, recognisable by their context rather than by their value.
+regexTarget = "line"
+
+paths = [
+  # Fixtures are invented Markdown documents with no credentials; a test asserts it.
+  '''tests/fixtures/markdown/.*\.md''',
+]
+
+regexes = [
+  # Placeholders a reader is meant to replace with their own value.
+  '''Authorization: Bearer (YOUR_TOKEN|YOUR_ADMIN_TOKEN|TU_TOKEN|TU_TOKEN_DE_ADMIN|<ACCESS-TOKEN>|TOKEN)''',
+  '''REPLACE_WITH_[A-Z_]+''',
+  '''PASTE_(THE|AQUI)_[A-Z_]+''',
+  '''PEGA_AQUI_[A-Z_]+''',
+  '''change-me[a-z-]*''',
+  # Lines quoted verbatim from Canvas source in the research document. `KEY_TTL` is the
+  # PKCE challenge lifetime in `lib/canvas/oauth/pkce.rb`, not a key.
+  '''KEY_TTL = 10\.minutes\.to_i''',
+  '''KEY_PREFIX = "oauth2/pkce:"''',
+]
