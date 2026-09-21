@@ -36,6 +36,7 @@ export type FetchDenialReason =
   | 'credentials_in_url'
   | 'too_many_redirects'
   | 'redirect_without_location'
+  | 'unexpected_redirect'
   | 'response_too_large'
   | 'timeout'
   | 'network_error'
@@ -103,7 +104,21 @@ export interface SafeRequestInit {
    */
   readonly bearerToken?: string;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly method?: 'GET' | 'HEAD';
+  readonly method?: 'GET' | 'HEAD' | 'POST';
+  /** Request body, for POST. Sent as `application/x-www-form-urlencoded` by default. */
+  readonly body?: string;
+  readonly contentType?: string;
+  /**
+   * Whether a redirect is followed. Token exchanges pass `false`: an authorization server
+   * that answers a credential exchange with a redirect is not something to chase.
+   */
+  readonly followRedirects?: boolean;
+  /**
+   * Whether an error status returns its body instead of throwing. OAuth2 describes its
+   * failures in the body of a 400 or 401 (RFC 6749 §5.2), so the token exchange needs to
+   * read them. A file download does not, and leaves this off.
+   */
+  readonly readErrorBody?: boolean;
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -126,6 +141,12 @@ export class SafeFetcher {
 
       if (REDIRECT_STATUSES.has(response.statusCode ?? 0)) {
         response.resume(); // the redirect body is never read
+        if (init.followRedirects === false) {
+          throw new FetchDenied(
+            'unexpected_redirect',
+            `upstream answered ${response.statusCode ?? 0} where a response was required`,
+          );
+        }
         const location = response.headers.location;
         if (!location) {
           throw new FetchDenied(
@@ -143,7 +164,7 @@ export class SafeFetcher {
       }
 
       const status = response.statusCode ?? 0;
-      if (status >= 400) {
+      if (status >= 400 && init.readErrorBody !== true) {
         response.resume();
         throw new FetchDenied('http_error', `upstream responded ${status}`, status);
       }
@@ -200,7 +221,12 @@ export class SafeFetcher {
     attachCredential: boolean,
   ): Promise<IncomingMessage> {
     const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const body = init.body;
     const headers: Record<string, string> = { ...init.headers, host: url.host };
+    if (body !== undefined) {
+      headers['content-type'] = init.contentType ?? 'application/x-www-form-urlencoded';
+      headers['content-length'] = String(Buffer.byteLength(body));
+    }
     if (init.bearerToken !== undefined && attachCredential) {
       headers['authorization'] = `Bearer ${init.bearerToken}`;
     } else {
@@ -236,6 +262,7 @@ export class SafeFetcher {
             : new FetchDenied('network_error', describeError(error)),
         );
       });
+      if (body !== undefined) req.write(body);
       req.end();
     });
   }
