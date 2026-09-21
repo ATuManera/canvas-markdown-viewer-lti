@@ -13,9 +13,23 @@ import { z } from 'zod';
  * and `sso.canvaslms.com` for the OIDC auth endpoint. Both are therefore configured
  * independently rather than derived from one another.
  */
-const httpsUrl = z
-  .url()
-  .refine((value) => new URL(value).protocol === 'https:', { message: 'must use https' });
+/**
+ * HTTPS, with one exception: a loopback host may use plain http.
+ *
+ * Browsers treat `http://localhost` as a secure context, and a developer running Canvas
+ * locally has no certificate for it. Anything reachable from elsewhere must still be https,
+ * and `loadConfig` refuses a non-https PUBLIC_URL in production regardless.
+ */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+const httpsUrl = z.url().refine(
+  (value) => {
+    const url = new URL(value);
+    if (url.protocol === 'https:') return true;
+    return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+  },
+  { message: 'must use https, except on a loopback host' },
+);
 
 /** Hostname, optionally with a leading `*.` wildcard for a single label. */
 const hostPattern = z

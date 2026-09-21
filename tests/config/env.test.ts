@@ -141,6 +141,20 @@ describe('platform schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('allows plain http on a loopback host, which browsers treat as secure', () => {
+    const result = platformsSchema.safeParse([
+      { ...PLATFORM, apiBaseUrl: 'http://localhost:3100' },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  it('does not extend that exception to a host that merely looks local', () => {
+    const result = platformsSchema.safeParse([
+      { ...PLATFORM, apiBaseUrl: 'http://localhost.evil.example' },
+    ]);
+    expect(result.success).toBe(false);
+  });
+
   it('rejects unknown keys so typos in configuration are loud', () => {
     const result = platformsSchema.safeParse([{ ...PLATFORM, clientID: 'typo' }]);
     expect(result.success).toBe(false);

@@ -5,7 +5,9 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default defineConfig([
-  globalIgnores(['dist/**', 'node_modules/**', 'coverage/**', 'public/vendor/**']),
+  // The browser script under public/ is plain ES5 for maximum compatibility and is
+  // linted by the browser, not by the type-aware rules meant for the server.
+  globalIgnores(['dist/**', 'node_modules/**', 'coverage/**', 'public/**']),
   eslint.configs.recommended,
   tseslint.configs.strictTypeChecked,
   {
