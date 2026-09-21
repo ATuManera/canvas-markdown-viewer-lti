@@ -152,6 +152,31 @@ export async function buildServer(options: BuildOptions): Promise<BuiltServer> {
     done();
   });
 
+  /**
+   * One line per request.
+   *
+   * This exists because of a real incident: a launch was failing, the tool's log was
+   * silent, and that silence was read as proof the request had never arrived. It had —
+   * the reverse proxy's log showed `POST /lti/login 200`. The tool simply logged nothing
+   * for a request that succeeded, so its log could neither confirm nor deny anything.
+   *
+   * Only the path is recorded, never the query string: an OIDC callback carries `state`
+   * and a Canvas URL can carry a `verifier`. Headers and bodies are never recorded at all.
+   */
+  app.addHook('onResponse', (request, reply, done) => {
+    // `request.url` includes the query string; the path alone is what may be logged.
+    const path = request.url.split('?')[0] ?? request.url;
+
+    logger.info('request', {
+      method: request.method,
+      path,
+      status: reply.statusCode,
+      ms: Math.round(reply.elapsedTime),
+      requestId: requestId(request),
+    });
+    done();
+  });
+
   const csp = (nonce?: string): string =>
     contentSecurityPolicy(config.platforms, {
       ...(nonce === undefined ? {} : { scriptNonce: nonce }),

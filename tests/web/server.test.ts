@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../../src/config/env.ts';
 import type { DbPool } from '../../src/db/pool.ts';
-import { silentLogger } from '../../src/logging/logger.ts';
+import { createLogger, silentLogger, type LogRecord } from '../../src/logging/logger.ts';
 import { buildServer } from '../../src/web/server.ts';
 import { SessionCodec } from '../../src/web/session.ts';
 import { frameAncestorsFor, contentSecurityPolicy } from '../../src/web/security-headers.ts';
@@ -620,6 +620,80 @@ suite('the published JWK Set', () => {
 
     const verified = await jwtVerify(token, await importJWK(published, 'RS256'));
     expect(verified.payload['probe']).toBe(true);
+  });
+});
+
+suite('request logging', () => {
+  /**
+   * Regression test for a real incident. A launch was failing; the tool's log was silent;
+   * that silence was taken as proof the request had never arrived. It had — the reverse
+   * proxy had logged `POST /lti/login 200`. A log that says nothing about a successful
+   * request cannot be used as evidence either way.
+   */
+  async function withRecordingServer<T>(
+    fn: (instance: FastifyInstance, records: LogRecord[]) => Promise<T>,
+  ): Promise<T> {
+    const records: LogRecord[] = [];
+    const recording = createLogger({ level: 'trace', sink: (r) => void records.push(r) });
+    const built = await buildServer({ config, pool, logger: recording });
+    await built.app.ready();
+    try {
+      return await fn(built.app, records);
+    } finally {
+      await built.app.close();
+    }
+  }
+
+  it('logs every request, including one that succeeds', async () => {
+    await withRecordingServer(async (instance, records) => {
+      await instance.inject({ method: 'GET', url: '/healthz' });
+
+      const line = records.find((r) => r.msg === 'request');
+      expect(line).toBeDefined();
+      expect(line?.['method']).toBe('GET');
+      expect(line?.['path']).toBe('/healthz');
+      expect(line?.['status']).toBe(200);
+      expect(typeof line?.['ms']).toBe('number');
+    });
+  });
+
+  it('logs a launch attempt, which is the case that went undiagnosed', async () => {
+    await withRecordingServer(async (instance, records) => {
+      await instance.inject({
+        method: 'POST',
+        url: '/lti/login',
+        payload: { iss: ISSUER, login_hint: 'user-1', client_id: CLIENT_ID },
+      });
+
+      const line = records.find((r) => r.msg === 'request' && r['path'] === '/lti/login');
+      expect(line).toBeDefined();
+      expect(line?.['status']).toBe(302);
+    });
+  });
+
+  it('records the path but never the query string', async () => {
+    await withRecordingServer(async (instance, records) => {
+      await instance.inject({
+        method: 'GET',
+        url: '/canvas/callback?state=secret-state-value&code=secret-code-value',
+      });
+
+      const line = records.find((r) => r.msg === 'request');
+      expect(line?.['path']).toBe('/canvas/callback');
+
+      const serialised = JSON.stringify(records);
+      expect(serialised).not.toContain('secret-state-value');
+      expect(serialised).not.toContain('secret-code-value');
+    });
+  });
+
+  it('logs a rejected request too, so a failure is never silent', async () => {
+    await withRecordingServer(async (instance, records) => {
+      await instance.inject({ method: 'POST', url: '/app/files', payload: {} });
+
+      const line = records.find((r) => r.msg === 'request' && r['path'] === '/app/files');
+      expect(line?.['status']).toBe(401);
+    });
   });
 });
 
