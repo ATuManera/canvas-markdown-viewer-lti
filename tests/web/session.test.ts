@@ -48,9 +48,9 @@ describe('SessionCodec', () => {
 
   it('refuses a token signed with a different secret', () => {
     const { token } = codec().issue(CLAIMS);
-    expect(() => codec({ secret: 'a-completely-different-secret-value-here' }).verify(token)).toThrow(
-      SessionError,
-    );
+    expect(() =>
+      codec({ secret: 'a-completely-different-secret-value-here' }).verify(token),
+    ).toThrow(SessionError);
   });
 
   it('refuses a payload edited after signing', () => {
