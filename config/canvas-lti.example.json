@@ -22,7 +22,13 @@
   "_comment_scopes": [
     "Empty on purpose. This tool calls no LTI Advantage service: it reads files through the",
     "Canvas REST API with each user's own OAuth2 token, which is granted by a separate API",
-    "developer key. Asking for LTI scopes here would request access the tool does not use."
+    "developer key. Asking for LTI scopes here would request access the tool does not use.",
+    "",
+    "The API developer key needs exactly two scopes, both read-only:",
+    "  url:GET|/api/v1/courses/:course_id/files",
+    "  url:GET|/api/v1/courses/:course_id/files/:id",
+    "Canvas publishes scopes for /api/v1 and /api/sis routes only, so the web download route",
+    "has none. The content is fetched through the url the File object itself supplies."
   ],
   "scopes": [],
 

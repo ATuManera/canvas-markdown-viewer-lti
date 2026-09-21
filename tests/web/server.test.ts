@@ -428,6 +428,9 @@ suite('the viewer', () => {
             display_name: 'apuntes.md',
             'content-type': 'text/markdown',
             size: 60,
+            // Canvas hands the content URL back on the File object; the tool consumes it
+            // once and never stores or exposes it. See ADR-002.
+            url: `${canvasOrigin}/files/1/download?download_frd=1&verifier=secret-uuid`,
           }),
         };
       }
@@ -461,6 +464,7 @@ suite('the viewer', () => {
             display_name: 'apuntes.md',
             'content-type': 'text/markdown',
             size: 10,
+            url: `${canvasOrigin}/files/1/download?download_frd=1&verifier=secret-uuid`,
           }),
         };
       }
@@ -477,6 +481,38 @@ suite('the viewer', () => {
     expect(response.headers['content-type']).toContain('text/markdown');
     expect(response.headers['content-disposition']).toContain('apuntes.md');
     expect(response.body).toBe('# Original');
+  });
+
+  it('never puts the ephemeral download URL in the page it renders', async () => {
+    await authorise();
+    canvasHandler = (url) => {
+      if (url.startsWith('/login/oauth2/token')) {
+        return { status: 200, body: JSON.stringify({ access_token: 'a', expires_in: 3600 }) };
+      }
+      if (url.startsWith('/api/v1/courses/')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            id: 1,
+            display_name: 'apuntes.md',
+            'content-type': 'text/markdown',
+            size: 20,
+            url: `${canvasOrigin}/files/1/download?verifier=secret-uuid-must-not-appear`,
+          }),
+        };
+      }
+      return { status: 200, body: '# Contenido' };
+    };
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/app/view',
+      payload: { session: token(), file: '1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('secret-uuid-must-not-appear');
+    expect(response.body).not.toContain('verifier');
   });
 
   it('reports a file the user may not read without leaking Canvas detail', async () => {

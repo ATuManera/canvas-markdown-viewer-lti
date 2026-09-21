@@ -14,11 +14,26 @@ import { SafeFetcher, redactUrl, type SafeFetchOptions } from './safe-fetch.ts';
  * Endpoints (Canvas `app/controllers/files_controller.rb`):
  *   GET /api/v1/courses/:course_id/files        "List files"
  *   GET /api/v1/courses/:course_id/files/:id    "Get file"
- *   GET /courses/:course_id/files/:id/download  "Download file"
+ *
+ * The content itself is fetched through the `url` the File object carries. The web download
+ * route `/courses/:course_id/files/:id/download` is **not** used: the physical test showed
+ * that Canvas publishes scopes only for `/api/v1` and `/api/sis` routes, so no developer key
+ * can be granted access to it. See `docs/architecture/ADR-002-canvas-file-access.md`.
+ *
+ * That URL is an ephemeral bearer credential — it carries a `verifier` that grants access to
+ * the file on its own — and is treated as one throughout: never stored, never returned to a
+ * browser, never logged, never placed in an error, and consumed immediately after the
+ * membership, type and size checks have passed.
  */
 
 export type FileErrorCode =
-  'not_found' | 'forbidden' | 'not_markdown' | 'too_large' | 'unreadable' | 'upstream_error';
+  | 'not_found'
+  | 'forbidden'
+  | 'not_markdown'
+  | 'too_large'
+  | 'unreadable'
+  | 'no_download_url'
+  | 'upstream_error';
 
 export class FileError extends Error {
   override readonly name = 'FileError';
@@ -40,6 +55,17 @@ export interface CanvasFile {
   readonly folderId: string | undefined;
   /** Whether name and declared type are both consistent with Markdown. */
   readonly isMarkdown: boolean;
+}
+
+/**
+ * A file's metadata together with the ephemeral URL Canvas issued for its content.
+ *
+ * Deliberately **not exported**: the URL must not reach the picker, a template, a log line
+ * or a response. It exists only between the metadata call and the download.
+ */
+interface FileWithDownloadUrl {
+  readonly file: CanvasFile;
+  readonly downloadUrl: string;
 }
 
 export interface MarkdownDocument {
@@ -136,16 +162,55 @@ export class CanvasFilesClient {
     });
     if (response.status >= 400) throw this.statusError(response.status);
 
-    const file = toCanvasFile(parseJson(response.body.toString('utf8')));
+    const raw = parseJson(response.body.toString('utf8'));
+    const file = toCanvasFile(raw);
     if (!file) throw new FileError('upstream_error', 'file metadata was not an object');
     return file;
   }
 
   /**
+   * The same course-scoped request, keeping the ephemeral download URL alongside the
+   * metadata. Private, so no caller can obtain the URL for any other purpose.
+   */
+  private async getFileWithDownloadUrl(
+    platform: Platform,
+    courseId: string,
+    fileId: string,
+    accessToken: string,
+  ): Promise<FileWithDownloadUrl> {
+    assertCanvasId(courseId, 'course');
+    assertCanvasId(fileId, 'file');
+
+    const url = new URL(
+      `/api/v1/courses/${courseId}/files/${fileId}`,
+      platform.apiBaseUrl,
+    ).toString();
+
+    const response = await this.api(platform).fetch(url, {
+      bearerToken: accessToken,
+      readErrorBody: true,
+    });
+    if (response.status >= 400) throw this.statusError(response.status);
+
+    const raw = parseJson(response.body.toString('utf8'));
+    const file = toCanvasFile(raw);
+    if (!file) throw new FileError('upstream_error', 'file metadata was not an object');
+
+    return { file, downloadUrl: extractDownloadUrl(raw) };
+  }
+
+  /**
    * Downloads a file and returns it as text.
    *
-   * The metadata is fetched first, so the size and type can be refused before a single byte
-   * of content is requested, and so the file's membership of the course is confirmed.
+   * Order matters and is part of the security argument:
+   *
+   *  1. The metadata is fetched through the **course-scoped** route, so Canvas itself
+   *     refuses a file belonging to another course and a file this user may not read.
+   *  2. Type and size are refused before any content is requested.
+   *  3. Only then is the ephemeral URL used, and it is used once.
+   *
+   * No `Authorization` header is sent with the download. The URL is self-authenticating,
+   * and attaching the user's token would hand it to whatever host Canvas points at.
    */
   async fetchMarkdown(
     platform: Platform,
@@ -153,7 +218,12 @@ export class CanvasFilesClient {
     fileId: string,
     accessToken: string,
   ): Promise<MarkdownDocument> {
-    const file = await this.getFile(platform, courseId, fileId, accessToken);
+    const { file, downloadUrl } = await this.getFileWithDownloadUrl(
+      platform,
+      courseId,
+      fileId,
+      accessToken,
+    );
 
     if (!file.isMarkdown) {
       throw new FileError('not_markdown', file.contentType || 'no declared type');
@@ -162,16 +232,16 @@ export class CanvasFilesClient {
       throw new FileError('too_large', `${file.size} bytes`);
     }
 
-    // The course-scoped download route, with the user's token. The File object's `url`
-    // field is deliberately not used: it carries a `verifier` that grants access without
-    // authentication, and this tool never holds such a URL. See ADR-002 §9.6.
-    const url = new URL(
-      `/courses/${courseId}/files/${fileId}/download?download_frd=1`,
-      platform.apiBaseUrl,
-    ).toString();
+    // Canvas leaves `url` empty for a file the user may not download, and a missing or
+    // unusable value is reported rather than worked around: constructing a path of our own
+    // would be guessing at an interface this Canvas does not offer.
+    if (downloadUrl === '') {
+      throw new FileError('no_download_url', 'the File object carried no usable url');
+    }
 
-    const response = await this.download(platform).fetch(url, {
-      bearerToken: accessToken,
+    const response = await this.downloadFetcher(platform).fetch(downloadUrl, {
+      // No bearer token: the URL authenticates itself, and the storage host must never see
+      // the user's Canvas credential.
       readErrorBody: true,
     });
     if (response.status >= 400) throw this.statusError(response.status);
@@ -179,6 +249,7 @@ export class CanvasFilesClient {
     const verdict = decodeMarkdown(response.body);
     if (!verdict.ok) throw new FileError('unreadable', verdict.reason);
 
+    // `response.redirects` and `response.finalUrl` are already redacted by the fetcher.
     return { file, text: verdict.text, via: response.redirects };
   }
 
@@ -202,14 +273,20 @@ export class CanvasFilesClient {
   }
 
   /**
-   * Downloads may legitimately redirect to a files domain or to object storage, so those
-   * hosts are allowed as redirect targets only. The bearer credential is dropped by the
-   * fetcher the moment the origin changes.
+   * Fetcher for the content itself.
+   *
+   * The URL comes from Canvas, never from a user, and may already point at a separate files
+   * domain — so the authorized Canvas host **and** the operator's download allowlist are
+   * accepted as the initial host. Redirects beyond that are confined to the same allowlist.
+   * Every other defence stays: https, per-hop address checks, connection pinning, a bounded
+   * number of hops, no downgrade to http, a timeout, and a size limit applied while the
+   * body streams.
    */
-  private download(platform: Platform): SafeFetcher {
+  private downloadFetcher(platform: Platform): SafeFetcher {
+    const canvasHost = new URL(platform.apiBaseUrl).hostname;
     return new SafeFetcher({
       ...this.options.fetchOptions,
-      originHosts: [new URL(platform.apiBaseUrl).hostname],
+      originHosts: [canvasHost, ...platform.downloadHostAllowlist],
       redirectHosts: platform.downloadHostAllowlist,
       maxBytes: this.options.maxFileBytes,
     });
@@ -226,6 +303,21 @@ function assertCanvasId(value: string, what: string): void {
   if (!/^[0-9]+$/.test(value)) {
     throw new FileError('not_found', `${what} id is not a Canvas id`);
   }
+}
+
+/**
+ * Reads the `url` field of a File object.
+ *
+ * Canvas sets it to `""` for a file the user may not download
+ * (`lib/api/v1/attachment.rb`). Anything that is not a non-empty string is treated as
+ * absent; an unusable value is reported by the caller rather than repaired here.
+ *
+ * The value is returned and never retained: it is a credential with a short life.
+ */
+function extractDownloadUrl(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return '';
+  const url = (value as Record<string, unknown>)['url'];
+  return typeof url === 'string' ? url.trim() : '';
 }
 
 function parseJson(text: string): unknown {

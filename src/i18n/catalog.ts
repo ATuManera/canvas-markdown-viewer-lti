@@ -62,6 +62,7 @@ export interface Messages {
   readonly errorNotMarkdown: string;
   readonly errorTooLarge: string;
   readonly errorUnreadable: string;
+  readonly errorNoDownloadUrl: string;
   readonly errorTooComplex: string;
   readonly errorNoCourse: string;
   readonly errorReference: string;
@@ -127,6 +128,8 @@ const es: Messages = {
   errorNotMarkdown: 'Este archivo no es Markdown, así que no se puede mostrar aquí.',
   errorTooLarge: 'El archivo supera el tamaño máximo configurado.',
   errorUnreadable: 'El archivo no parece texto legible.',
+  errorNoDownloadUrl:
+    'Canvas no ha entregado una dirección de descarga para este archivo. Puede que ya no esté disponible o que no tengas permiso para descargarlo.',
   errorTooComplex: 'El documento es demasiado extenso o complejo para mostrarlo.',
   errorNoCourse: 'Esta herramienta debe abrirse desde los archivos de un curso.',
   errorReference: 'Referencia para soporte',
@@ -191,6 +194,8 @@ const en: Messages = {
   errorNotMarkdown: 'That file is not Markdown, so it cannot be shown here.',
   errorTooLarge: 'The file is larger than the configured limit.',
   errorUnreadable: 'The file does not appear to be readable text.',
+  errorNoDownloadUrl:
+    'Canvas did not supply a download address for this file. It may no longer be available, or you may not have permission to download it.',
   errorTooComplex: 'The document is too long or too complex to display.',
   errorNoCourse: 'This tool has to be opened from the files of a course.',
   errorReference: 'Support reference',

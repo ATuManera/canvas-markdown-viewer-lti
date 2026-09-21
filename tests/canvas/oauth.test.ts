@@ -152,6 +152,22 @@ describe('PKCE', () => {
 });
 
 describe('scopes', () => {
+  it('asks for exactly the two scopes Canvas publishes', () => {
+    // Canvas offers a scope only for /api/v1 and /api/sis routes, so the web download
+    // route cannot be granted. Asking for a third, non-existent scope made Canvas refuse
+    // the authorisation outright during the physical test. See ADR-002.
+    expect([...CANVAS_API_SCOPES]).toEqual([
+      'url:GET|/api/v1/courses/:course_id/files',
+      'url:GET|/api/v1/courses/:course_id/files/:id',
+    ]);
+  });
+
+  it('asks for no scope outside /api/v1', () => {
+    for (const scope of CANVAS_API_SCOPES) {
+      expect(scope).toMatch(/^url:GET\|\/api\/v1\//);
+    }
+  });
+
   it('asks only for read access', () => {
     for (const scope of CANVAS_API_SCOPES) {
       expect(scope.startsWith('url:GET|')).toBe(true);
@@ -178,6 +194,15 @@ suite('beginAuthorization', () => {
     expect(parsed.searchParams.get('code_challenge')).toBeTruthy();
     expect(parsed.searchParams.getAll('scope')).toHaveLength(1);
     expect(parsed.searchParams.get('scope')).toBe(scopeParameter());
+  });
+
+  it('sends exactly two scope values in the authorization request', async () => {
+    const oauth = oauthFor(pool);
+    const { url } = await oauth.beginAuthorization(platformFor(origin), contextFor());
+    const scopes = (new URL(url).searchParams.get('scope') ?? '').split(' ').filter(Boolean);
+
+    expect(scopes).toHaveLength(2);
+    expect(scopes).not.toContain('url:GET|/courses/:course_id/files/:id/download');
   });
 
   it('never offers the plain challenge method', async () => {

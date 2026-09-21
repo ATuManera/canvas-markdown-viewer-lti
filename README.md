@@ -40,8 +40,9 @@ What that means in practice:
 - ✅ The container builds and passes a smoke test.
 - ⏳ The LTI launch, the OAuth2 consent and the browser behaviour have not been exercised
   against a live Canvas.
-- ⏳ The exact Canvas API scope strings are derived from Canvas source and must be confirmed
-  against a target installation.
+- ✅ The Canvas API scope strings have been confirmed against a real installation. One of the
+  three originally inferred did not exist, and the download now uses the URL the File object
+  supplies.
 
 Progress is in [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -119,7 +120,7 @@ id, TLS at the origin, Cloudflare, and how to undo all of it — is in
 
 The short version: create an LTI key from
 [`config/canvas-lti.example.json`](config/canvas-lti.example.json), create an API key with
-_Enforce Scopes_ and three read-only scopes, install the app by client id, and put the
+_Enforce Scopes_ and two read-only scopes, install the app by client id, and put the
 deployment id in `.env`.
 
 ## Security and privacy

@@ -2,27 +2,29 @@
  * Canvas REST API scopes this tool asks for.
  *
  * Canvas builds a scope string as `url:{VERB}|{path}` from its own routing table
- * (`lib/token_scopes_helper.rb#scope_from_route`). The three below were derived from the
- * routes in `config/routes.rb`:
+ * (`lib/token_scopes_helper.rb#scope_from_route`), but it only offers a scope for routes
+ * its filter accepts. On the installation this tool was tested against that filter is:
  *
- *   GET /api/v1/courses/:course_id/files         (files#api_index, "List files")
- *   GET /api/v1/courses/:course_id/files/:id     (files#api_show,  "Get file")
- *   GET /courses/:course_id/files/:id/download   (files#show,      "Download file")
+ *     Rails.application.routes.routes.select { |route|
+ *       %r{^/api/(v1|sis)} =~ route.path.spec.to_s
+ *     }
  *
- * The download route is scopable through an explicit exception in the regex that decides
- * which routes may appear in a developer key (`lib/token_scopes.rb#api_routes`).
+ * So **only `/api/v1` and `/api/sis` routes are scopable**. The web download route
+ * `/courses/:course_id/files/:id/download` has no scope and cannot be selected on a
+ * developer key.
  *
- * **Status: verified in Canvas source, pending physical validation.** The exact strings
- * must be confirmed against the target installation before the installation guide is
- * published, either from the developer key screen or from
- * `GET /api/v1/accounts/:account_id/scopes`. See `docs/research/canvas-lti-file-menu.md` §9.3.
+ * An earlier revision of this file listed that download route as a third scope. It was
+ * inferred from a wider filter present in `instructure/canvas-lms` on `master`, and the
+ * physical test refuted it: the scope does not exist on the target Canvas. The download is
+ * therefore performed through the `url` the File object carries, which is the mechanism
+ * this version of Canvas provides. See `docs/architecture/ADR-002-canvas-file-access.md`.
  *
- * All three are read-only. The tool asks for no write scope of any kind.
+ * Both scopes below are read-only. The tool asks for no write scope of any kind, and for no
+ * scope beyond these two.
  */
 export const CANVAS_API_SCOPES = [
   'url:GET|/api/v1/courses/:course_id/files',
   'url:GET|/api/v1/courses/:course_id/files/:id',
-  'url:GET|/courses/:course_id/files/:id/download',
 ] as const;
 
 /**

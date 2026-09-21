@@ -22,6 +22,7 @@ let server: Server;
 let origin: string;
 let route: Route = () => undefined;
 let seenAuthorization: (string | undefined)[] = [];
+const storageServers: Server[] = [];
 
 function platformFor(base: string, redirectHosts: string[] = []): Platform {
   return {
@@ -83,18 +84,46 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.closeAllConnections();
-    server.close(() => {
-      resolve();
-    });
-  });
+  await Promise.all(
+    [server, ...storageServers].map(
+      (instance) =>
+        new Promise<void>((resolve) => {
+          instance.closeAllConnections();
+          instance.close(() => {
+            resolve();
+          });
+        }),
+    ),
+  );
 });
 
 beforeEach(() => {
   seenAuthorization = [];
   route = () => undefined;
 });
+
+/**
+ * A second server standing in for a Canvas files domain or object storage. It records
+ * whether it was sent an Authorization header, which is the point of several tests: the
+ * user's Canvas token must never reach it.
+ */
+async function startStorageServer(body: string) {
+  let sawAuthorization: string | undefined;
+  const storage = createServer((req, res) => {
+    sawAuthorization = req.headers.authorization;
+    res.writeHead(200, { 'content-type': 'text/markdown' });
+    res.end(body);
+  });
+  storageServers.push(storage);
+
+  await new Promise<void>((resolve) => {
+    storage.listen(0, '127.0.0.1', resolve);
+  });
+  const address = storage.address();
+  if (typeof address === 'string' || address === null) throw new Error('no port');
+
+  return { port: address.port, sawAuthorization: () => sawAuthorization };
+}
 
 describe('markdown detection — extension', () => {
   it('recognises the usual Markdown extensions', () => {
@@ -309,12 +338,26 @@ describe('nextPageUrl', () => {
 });
 
 describe('fetchMarkdown', () => {
+  /**
+   * The download now goes through the `url` the File object carries, because Canvas
+   * publishes scopes only for /api/v1 and /api/sis routes and the web download route
+   * therefore cannot be granted. See ADR-002.
+   */
   function serveFile(body: string, meta: Record<string, unknown> = {}) {
     route = (path) => {
       if (path.startsWith('/api/v1/courses/42/files/77')) {
-        return { status: 200, body: JSON.stringify(fileJson({ size: body.length, ...meta })) };
+        return {
+          status: 200,
+          body: JSON.stringify(
+            fileJson({
+              size: body.length,
+              url: `${origin}/files/77/download?download_frd=1&verifier=secret-attachment-uuid`,
+              ...meta,
+            }),
+          ),
+        };
       }
-      if (path.startsWith('/courses/42/files/77/download')) {
+      if (path.startsWith('/files/77/download')) {
         return { status: 200, body };
       }
       return undefined;
@@ -329,35 +372,14 @@ describe('fetchMarkdown', () => {
     expect(doc.file.displayName).toBe('apuntes.md');
   });
 
-  it('asks Canvas for the metadata through the course-scoped route', async () => {
-    const paths: string[] = [];
-    route = (path) => {
-      paths.push(path);
-      if (path.includes('/api/v1/')) return { status: 200, body: JSON.stringify(fileJson()) };
-      return { status: 200, body: '# ok' };
-    };
-
-    await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
-
-    expect(paths[0]).toBe('/api/v1/courses/42/files/77');
-  });
-
-  it('sends the user’s token on both calls', async () => {
-    serveFile('# ok');
-    await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
-    expect(seenAuthorization).toEqual([`Bearer ${TOKEN}`, `Bearer ${TOKEN}`]);
-  });
-
-  it('never requests the download URL Canvas puts in the File object', async () => {
+  it('asks Canvas for the metadata through the course-scoped route, first', async () => {
     const paths: string[] = [];
     route = (path) => {
       paths.push(path);
       if (path.includes('/api/v1/')) {
         return {
           status: 200,
-          body: JSON.stringify(
-            fileJson({ url: `${origin}/files/77/download?verifier=secret-uuid&download=1` }),
-          ),
+          body: JSON.stringify(fileJson({ url: `${origin}/files/77/download?verifier=v` })),
         };
       }
       return { status: 200, body: '# ok' };
@@ -365,18 +387,92 @@ describe('fetchMarkdown', () => {
 
     await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
 
-    expect(paths.some((p) => p.includes('verifier='))).toBe(false);
-    expect(paths[1]).toContain('/courses/42/files/77/download');
+    expect(paths[0]).toBe('/api/v1/courses/42/files/77');
+    expect(paths[1]).toContain('/files/77/download');
   });
 
-  it('refuses a file that is not Markdown before downloading anything', async () => {
+  it('sends the user’s token to the metadata call and to nothing else', async () => {
+    serveFile('# ok');
+    await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
+
+    // The metadata request is authorised; the download is not, because the URL
+    // authenticates itself and the storage host must never see the user's credential.
+    expect(seenAuthorization[0]).toBe(`Bearer ${TOKEN}`);
+    expect(seenAuthorization[1]).toBeUndefined();
+  });
+
+  it('uses the URL Canvas supplied rather than constructing one', async () => {
+    const paths: string[] = [];
+    route = (path) => {
+      paths.push(path);
+      if (path.includes('/api/v1/')) {
+        return {
+          status: 200,
+          body: JSON.stringify(fileJson({ url: `${origin}/some/other/place?token=canvas-issued` })),
+        };
+      }
+      return { status: 200, body: '# ok' };
+    };
+
+    await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
+
+    expect(paths[1]).toContain('/some/other/place');
+    expect(paths.some((p) => p.includes('/courses/42/files/77/download'))).toBe(false);
+  });
+
+  it('never exposes the ephemeral URL on the returned document', async () => {
+    serveFile('# ok');
+    const doc = await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
+
+    const serialised = JSON.stringify(doc);
+    expect(serialised).not.toContain('secret-attachment-uuid');
+    expect(serialised).not.toContain('verifier');
+    expect(doc.file).not.toHaveProperty('url');
+    expect(doc.file).not.toHaveProperty('downloadUrl');
+  });
+
+  it('redacts the query of every hop it reports', async () => {
+    route = (path) => {
+      if (path.includes('/api/v1/')) {
+        return {
+          status: 200,
+          body: JSON.stringify(
+            fileJson({ url: `${origin}/files/77/download?verifier=secret-attachment-uuid` }),
+          ),
+        };
+      }
+      if (path.startsWith('/files/77/download')) {
+        return {
+          status: 302,
+          body: '',
+          headers: { location: `${origin}/storage/blob?signature=secret-signature` },
+        };
+      }
+      return { status: 200, body: '# ok' };
+    };
+
+    const doc = await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
+
+    expect(doc.text).toBe('# ok');
+    for (const hop of doc.via) {
+      expect(hop).not.toContain('secret-attachment-uuid');
+      expect(hop).not.toContain('secret-signature');
+      expect(hop).toContain('[redacted]');
+    }
+  });
+
+  it('refuses a file that is not Markdown before requesting any content', async () => {
     const paths: string[] = [];
     route = (path) => {
       paths.push(path);
       return {
         status: 200,
         body: JSON.stringify(
-          fileJson({ display_name: 'informe.pdf', 'content-type': 'application/pdf' }),
+          fileJson({
+            display_name: 'informe.pdf',
+            'content-type': 'application/pdf',
+            url: `${origin}/files/77/download?verifier=v`,
+          }),
         ),
       };
     };
@@ -387,11 +483,16 @@ describe('fetchMarkdown', () => {
     expect(paths).toHaveLength(1);
   });
 
-  it('refuses a file larger than the limit before downloading anything', async () => {
+  it('refuses a file larger than the limit before requesting any content', async () => {
     const paths: string[] = [];
     route = (path) => {
       paths.push(path);
-      return { status: 200, body: JSON.stringify(fileJson({ size: 9_000_000 })) };
+      return {
+        status: 200,
+        body: JSON.stringify(
+          fileJson({ size: 9_000_000, url: `${origin}/files/77/download?verifier=v` }),
+        ),
+      };
     };
 
     await expect(
@@ -400,15 +501,85 @@ describe('fetchMarkdown', () => {
     expect(paths).toHaveLength(1);
   });
 
-  it('refuses a file whose body turns out to be binary despite its name', async () => {
-    route = (path) =>
-      path.includes('/api/v1/')
-        ? { status: 200, body: JSON.stringify(fileJson()) }
-        : { status: 200, body: 'PK\u0000\u0003binary' };
+  it('fails safely when the File object carries no url', async () => {
+    route = () => ({ status: 200, body: JSON.stringify(fileJson({ url: '' })) });
 
     await expect(client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN)).rejects.toThrow(
-      /unreadable/,
+      /no_download_url/,
     );
+  });
+
+  it('fails safely when the url field is missing altogether', async () => {
+    route = () => {
+      const file = fileJson();
+      delete file['url'];
+      return { status: 200, body: JSON.stringify(file) };
+    };
+
+    await expect(client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN)).rejects.toThrow(
+      /no_download_url/,
+    );
+  });
+
+  it('fails safely when the url is not a string', async () => {
+    route = () => ({ status: 200, body: JSON.stringify(fileJson({ url: { href: 'x' } })) });
+
+    await expect(client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN)).rejects.toThrow(
+      /no_download_url/,
+    );
+  });
+
+  it('refuses a url pointing at a host that is not allowed', async () => {
+    route = () => ({
+      status: 200,
+      body: JSON.stringify(fileJson({ url: 'https://evil.example/steal?verifier=v' })),
+    });
+
+    await expect(client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN)).rejects.toThrow(
+      /host_not_allowed/,
+    );
+  });
+
+  it('accepts a url on a host the operator listed for downloads', async () => {
+    const storage = await startStorageServer('# from storage');
+    route = (path) =>
+      path.includes('/api/v1/')
+        ? {
+            status: 200,
+            body: JSON.stringify(
+              fileJson({ url: `http://127.0.0.1:${storage.port}/blob?signature=s` }),
+            ),
+          }
+        : undefined;
+
+    const doc = await client().fetchMarkdown(platformFor(origin, ['127.0.0.1']), '42', '77', TOKEN);
+
+    expect(doc.text).toBe('# from storage');
+    expect(storage.sawAuthorization()).toBeUndefined();
+  });
+
+  it('drops nothing to leak when the url redirects to storage', async () => {
+    const storage = await startStorageServer('# redirected');
+    route = (path) => {
+      if (path.includes('/api/v1/')) {
+        return {
+          status: 200,
+          body: JSON.stringify(
+            fileJson({ url: `${origin}/files/77/download?verifier=secret-attachment-uuid` }),
+          ),
+        };
+      }
+      return {
+        status: 302,
+        body: '',
+        headers: { location: `http://127.0.0.1:${storage.port}/blob?signature=s` },
+      };
+    };
+
+    const doc = await client().fetchMarkdown(platformFor(origin, ['127.0.0.1']), '42', '77', TOKEN);
+
+    expect(doc.text).toBe('# redirected');
+    expect(storage.sawAuthorization()).toBeUndefined();
   });
 
   it('reports a file the user may not read as forbidden', async () => {
@@ -436,11 +607,39 @@ describe('fetchMarkdown', () => {
   it('stops a download that exceeds the limit while streaming, despite honest metadata', async () => {
     route = (path) =>
       path.includes('/api/v1/')
-        ? { status: 200, body: JSON.stringify(fileJson({ size: 10 })) }
+        ? {
+            status: 200,
+            body: JSON.stringify(
+              fileJson({ size: 10, url: `${origin}/files/77/download?verifier=v` }),
+            ),
+          }
         : { status: 200, body: 'x'.repeat(50_000) };
 
     await expect(
       client(1_000).fetchMarkdown(platformFor(origin), '42', '77', TOKEN),
     ).rejects.toThrow(/response_too_large/);
+  });
+
+  it('keeps the ephemeral url out of the error it raises', async () => {
+    route = () => ({
+      status: 200,
+      body: JSON.stringify(
+        fileJson({ url: 'https://evil.example/steal?verifier=secret-attachment-uuid' }),
+      ),
+    });
+
+    let error: Error | undefined;
+    try {
+      await client().fetchMarkdown(platformFor(origin), '42', '77', TOKEN);
+    } catch (thrown) {
+      error = thrown as Error;
+    }
+
+    expect(error).toBeDefined();
+    expect(error!.message).not.toContain('secret-attachment-uuid');
+    // Every own property, not just the message: a detail field leaks just as readily.
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error!))).not.toContain(
+      'secret-attachment-uuid',
+    );
   });
 });

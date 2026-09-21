@@ -87,7 +87,13 @@ export interface SafeResponse {
   readonly status: number;
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
   readonly body: Buffer;
-  /** The URL the body was finally read from, after any redirects. */
+  /**
+   * Where the body was finally read from, **redacted**: query and fragment removed.
+   *
+   * The raw URL is deliberately not exposed. A Canvas download URL carries a `verifier`
+   * that is itself a credential, and a field on a returned object ends up in a log line,
+   * an error message or a diagnostic sooner or later.
+   */
   readonly finalUrl: string;
   readonly finalOrigin: string;
   /** Whether the bearer credential survived to the final hop. */
@@ -174,7 +180,7 @@ export class SafeFetcher {
         status,
         headers: response.headers,
         body,
-        finalUrl: current.toString(),
+        finalUrl: redactUrl(current),
         finalOrigin: current.origin,
         bearerSent: init.bearerToken !== undefined && !bearerDropped,
         redirects,
@@ -330,9 +336,12 @@ function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
 }
 
 /**
- * Renders a URL for logs and diagnostics with the query string removed. Canvas download
- * URLs may carry `verifier`, `sf_verifier` or a storage signature, none of which belong in
- * a log line.
+ * Renders a URL for logs and diagnostics with the query string **and fragment** removed.
+ *
+ * A Canvas download URL carries `verifier` — the attachment's UUID — which grants access to
+ * the file on its own. Storage redirects carry a signature. Neither belongs in a log line,
+ * an error message or anything a caller might print, so the only form of these URLs that
+ * ever leaves this module is this one.
  */
 export interface HopContext {
   /** True for the request the caller made; false for anything reached via a redirect. */
@@ -387,7 +396,9 @@ export function validateHop(raw: string, hop: HopContext, options: SafeFetchOpti
 export function redactUrl(url: URL | string): string {
   try {
     const parsed = typeof url === 'string' ? new URL(url) : url;
-    return `${parsed.origin}${parsed.pathname}${parsed.search ? '?[redacted]' : ''}`;
+    const query = parsed.search ? '?[redacted]' : '';
+    const fragment = parsed.hash ? '#[redacted]' : '';
+    return `${parsed.origin}${parsed.pathname}${query}${fragment}`;
   } catch {
     return '[unparseable url]';
   }

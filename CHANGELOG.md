@@ -9,11 +9,22 @@ Notable changes to this project. The format follows
 Nothing released yet. The first release will be cut once the tool has been verified against
 a live Canvas installation; see `docs/roadmap.md`.
 
+### Fixed
+
+- The OAuth2 request asked for a third scope,
+  `url:GET|/courses/:course_id/files/:id/download`, which does not exist: Canvas publishes
+  scopes for `/api/v1` and `/api/sis` routes only. It was inferred from a wider filter on
+  `instructure/canvas-lms` `master` and refuted by testing against a real installation.
+  The content is now fetched through the `url` the File object supplies, treated as the
+  ephemeral bearer credential it is — consumed once, never stored, never returned to a
+  browser, never logged, and sent no `Authorization` header.
+
 ### Added
 
 - LTI 1.3 launch validation: signature against the platform JWKS, issuer, audience, `azp`,
   expiry, single-use `state`, single-use `nonce`, deployment id and message type.
-- Canvas REST API access through OAuth2 with PKCE S256, on each user's own token.
+- Canvas REST API access through OAuth2 with PKCE S256, on each user's own token, asking for
+  exactly two read-only scopes.
 - Refresh tokens sealed with AES-256-GCM, bound to their owner, with key versioning and
   rotation.
 - SSRF-hardened HTTP client: per-hop scheme, host and address checks, connection pinning,

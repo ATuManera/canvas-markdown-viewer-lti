@@ -773,6 +773,8 @@ function userFacingMessage(error: unknown, messages: ReturnType<typeof messagesF
         return messages.errorTooLarge;
       case 'unreadable':
         return messages.errorUnreadable;
+      case 'no_download_url':
+        return messages.errorNoDownloadUrl;
       default:
         return messages.errorGeneric;
     }

@@ -40,8 +40,9 @@ En concreto:
 - ✅ El contenedor se construye y supera una prueba de humo.
 - ⏳ El lanzamiento LTI, el consentimiento OAuth2 y el comportamiento de los navegadores no
   se han ejercitado contra un Canvas real.
-- ⏳ Las cadenas exactas de los scopes de la API de Canvas se derivaron del código fuente de
-  Canvas y deben confirmarse contra la instalación de destino.
+- ✅ Las cadenas de los scopes se han confirmado contra una instalación real. Uno de los tres
+  que se habían inferido no existía, y la descarga usa ahora la dirección que entrega el
+  propio objeto File.
 
 El avance está en [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -119,7 +120,7 @@ el identificador de despliegue, TLS en el origen, Cloudflare y cómo deshacerlo 
 
 En corto: crea una LTI Key a partir de
 [`config/canvas-lti.example.json`](config/canvas-lti.example.json), crea una API Key con
-_Enforce Scopes_ y tres scopes de solo lectura, instala la app por client id y pon el
+_Enforce Scopes_ y dos scopes de solo lectura, instala la app por client id y pon el
 identificador de despliegue en `.env`.
 
 ## Seguridad y privacidad

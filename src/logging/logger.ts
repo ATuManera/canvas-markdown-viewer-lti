@@ -64,7 +64,18 @@ const FORBIDDEN_KEYS = new Set(
 /** Values that look like bearer tokens or JWTs, wherever they appear. */
 const TOKEN_SHAPED = /\b(?:[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,})\b/g;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
-const QUERY_SECRET = /([?&](?:verifier|sf_verifier|access_token|token|code)=)[^&\s]+/gi;
+
+/**
+ * Any absolute http(s) URL appearing in a logged value.
+ *
+ * Its **whole** query string and fragment are removed, not a list of named parameters.
+ * A Canvas content URL carries `verifier`; a files-domain redirect carries `sf_verifier`;
+ * object storage carries `X-Amz-Signature`, `X-Goog-Signature` or an Azure SAS. Enumerating
+ * those names means the list is always one provider behind, and the failure mode is a
+ * credential in a log file. Redacting the query wholesale has no such gap, and the origin
+ * and path — which is what a diagnosis actually needs — are kept.
+ */
+const ABSOLUTE_URL = /\bhttps?:\/\/[^\s"'<>\\)\]}]+/gi;
 
 function normaliseKey(key: string): string {
   return key.toLowerCase().replace(/[-_]/g, '');
@@ -100,9 +111,29 @@ export function redact(value: unknown, depth = 0): unknown {
 function redactString(value: string): string {
   const cleaned = value
     .replace(BEARER, `Bearer ${REDACTED}`)
-    .replace(TOKEN_SHAPED, REDACTED)
-    .replace(QUERY_SECRET, `$1${REDACTED}`);
+    .replace(ABSOLUTE_URL, stripQuery)
+    .replace(TOKEN_SHAPED, REDACTED);
   return cleaned.length > MAX_STRING ? `${cleaned.slice(0, MAX_STRING)}…[truncated]` : cleaned;
+}
+
+/** Keeps a URL's origin and path; removes everything that could be a credential. */
+function stripQuery(match: string): string {
+  // Trailing punctuation is part of the sentence, not of the URL.
+  const trailing = /[.,;:!?]+$/.exec(match)?.[0] ?? '';
+  const candidate = trailing ? match.slice(0, -trailing.length) : match;
+
+  try {
+    const url = new URL(candidate);
+    // Nothing to remove: return the value untouched. Normalising it would rewrite an
+    // issuer — an exact identifier — by appending a path it did not have.
+    if (url.search === '' && url.hash === '') return match;
+
+    const query = url.search ? '?[redacted]' : '';
+    const fragment = url.hash ? '#[redacted]' : '';
+    return `${url.origin}${url.pathname}${query}${fragment}${trailing}`;
+  } catch {
+    return `${REDACTED}${trailing}`;
+  }
 }
 
 export interface LogRecord {
