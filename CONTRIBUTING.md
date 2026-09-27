@@ -57,12 +57,13 @@ prefer that.
 
 ## Keeping the documentation true
 
-If a change alters something the documentation describes — an architecture decision, a
-threat, a stored field, a setting — **update that document in the same change**. A design
+If a change alters something the documentation describes — a stored field, a setting, a
+security property — **update the README, CHANGELOG or SECURITY.md in the same change**. A
 document that has drifted from the code is worse than none, because people trust it.
 
-Architecture decisions live in `docs/architecture/` as numbered ADRs. Changing a decision
-means a new ADR that supersedes the old one, not an edit that quietly rewrites history.
+This project's architecture decisions and threat model are kept in an internal design
+document, not published in this repository. If your change affects either, say so in the
+pull request; the maintainer will update that document separately.
 
 ## Commits and pull requests
 

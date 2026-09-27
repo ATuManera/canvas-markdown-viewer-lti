@@ -48,7 +48,7 @@ have administrative access to the machine or the database.
 
 ## What this project already does
 
-Each of these is enforced by a test; see `docs/security/threat-model.md` for the full table.
+Each of these is enforced by a test.
 
 - Full LTI 1.3 launch validation: signature against the platform's JWKS, issuer, audience,
   `azp`, expiry, single-use `state`, single-use `nonce`, deployment id, message type.
@@ -72,7 +72,7 @@ Each of these is enforced by a test; see `docs/security/threat-model.md` for the
 These are design consequences, documented rather than hidden:
 
 - An operator with access to the process environment can decrypt the stored tokens. That is
-  inherent to holding delegated credentials; see `docs/security/privacy.md`.
+  inherent to holding delegated credentials.
 - The tool trusts the Canvas instance it is registered with. A compromised Canvas can
   present a valid launch.
 - A user who can legitimately read a file can read it through this tool. That is the point.

@@ -5,7 +5,7 @@
 [![CI](https://github.com/ATuManera/canvas-markdown-viewer-lti/actions/workflows/ci.yml/badge.svg)](https://github.com/ATuManera/canvas-markdown-viewer-lti/actions/workflows/ci.yml)
 [![Licencia: Apache 2.0](https://img.shields.io/badge/Licencia-Apache_2.0-blue.svg)](LICENSE)
 
-> 🇬🇧 **[Read this in English](README.md)** · 📘 **[Guía de instalación](docs/installation/canvas-self-hosted.md)**
+> 🇬🇧 **[Read this in English](README.md)**
 
 ---
 
@@ -28,29 +28,25 @@ del JavaScript del tema de Canvas.
 
 ## Qué aspecto tiene
 
-Todavía no hay captura. Este proyecto no se ha verificado contra una instalación real de
-Canvas, así que no hay nada que enseñar que no fuera una escenificación. Se añadirá aquí
-cuando se verifique, y esta frase desaparecerá.
-
-Por lo mismo, no hay versión publicada. Ver [Estado](#estado).
+Todavía no hay captura. Se añadirá aquí cuando la interfaz se haya asentado.
 
 ## Estado
 
-**Sin publicar todavía.** El código está completo y probado; no se ha ejecutado contra una
-instalación real de Canvas. Hasta que eso ocurra, este proyecto no afirma que funcione en
-producción, y no hay ninguna versión etiquetada.
+**Publicado, v0.1.0.** El lanzamiento LTI 1.3, el consentimiento OAuth2 y el flujo completo
+de lectura y renderizado se han ejercitado de extremo a extremo contra una instalación real
+de Canvas autohospedada.
 
 En concreto:
 
 - ✅ Cada componente tiene pruebas automatizadas, incluidos los casos negativos de seguridad.
 - ✅ El contenedor se construye y supera una prueba de humo.
-- ⏳ El lanzamiento LTI, el consentimiento OAuth2 y el comportamiento de los navegadores no
-  se han ejercitado contra un Canvas real.
+- ✅ El lanzamiento LTI, el consentimiento OAuth2 y el comportamiento de los navegadores se
+  han verificado contra un Canvas real.
 - ✅ Las cadenas de los scopes se han confirmado contra una instalación real. Uno de los tres
   que se habían inferido no existía, y la descarga usa ahora la dirección que entrega el
   propio objeto File.
 
-El avance está en [`docs/roadmap.md`](docs/roadmap.md).
+Ver [`CHANGELOG.md`](CHANGELOG.md) para lo publicado en cada versión.
 
 ## Cómo funciona
 
@@ -69,7 +65,8 @@ Menú de archivo   ──►  Lanzamiento LTI 1.3  ──►  esta herramienta  
 4. La herramienta lista los archivos Markdown que esa persona puede ver, descarga el elegido
    y lo renderiza tras dos barreras independientes contra XSS.
 
-Detalle completo: [`docs/architecture/architecture.md`](docs/architecture/architecture.md).
+Las decisiones de arquitectura y el modelo de amenazas se mantienen en la documentación
+interna del proyecto, no publicada en este repositorio.
 
 ### Algo que conviene saber antes de instalar
 
@@ -78,8 +75,8 @@ Detalle completo: [`docs/architecture/architecture.md`](docs/architecture/archit
 No es un descuido de este proyecto. El identificador del archivo solo existe en una URL
 interna de Canvas y lo consume la ruta heredada de LTI 1.1; el lanzamiento 1.3 no lleva
 ninguna referencia a él, y Canvas no expone ningún scope de LTI Advantage que permita leer
-archivos de curso. La evidencia, leída del código fuente de Canvas, está en
-[`docs/research/canvas-lti-file-menu.md`](docs/research/canvas-lti-file-menu.md).
+archivos de curso. Esto se confirmó leyendo directamente el código fuente de Canvas
+correspondiente.
 
 Por eso el flujo es: **Ver Markdown → elegir el archivo → leerlo.** El selector muestra
 primero los Markdown, tiene búsqueda y explica por qué está ahí. Es un clic más, y la
@@ -89,16 +86,16 @@ Proponer una mejora a Canvas para resolverlo está en la hoja de ruta.
 
 ## Compatibilidad
 
-|             |                                                                                                                                                             |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canvas      | Autohospedado. El Canvas de Instructure debería funcionar —la herramienta contempla el dominio de autenticación OIDC separado— pero **no está verificado**. |
-| LTI         | Solo 1.3. LTI 1.1 no se admite ni se admitirá.                                                                                                              |
-| Node.js     | 24 LTS, si lo ejecutas sin el contenedor                                                                                                                    |
-| PostgreSQL  | 12 o superior                                                                                                                                               |
-| Navegadores | Chrome, Safari, Firefox y navegadores móviles. Funciona con las cookies de terceros bloqueadas.                                                             |
+|             |                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canvas      | Autohospedado, verificado contra una instalación real. El Canvas de Instructure debería funcionar —la herramienta contempla el dominio de autenticación OIDC separado— pero **no está verificado**. |
+| LTI         | Solo 1.3. LTI 1.1 no se admite ni se admitirá.                                                                                                                                                      |
+| Node.js     | 24 LTS, si lo ejecutas sin el contenedor                                                                                                                                                            |
+| PostgreSQL  | 12 o superior                                                                                                                                                                                       |
+| Navegadores | Chrome, Safari, Firefox y navegadores móviles. Funciona con las cookies de terceros bloqueadas.                                                                                                     |
 
-No se afirma haber probado ninguna versión concreta de Canvas, porque no se ha probado
-ninguna.
+La versión concreta de Canvas probada no se hace pública aquí; considera cualquier Canvas
+autohospedado reciente como objetivo.
 
 ## Puesta en marcha rápida
 
@@ -120,23 +117,16 @@ La herramienta no termina TLS. Pon delante un reverse proxy con un certificado v
 
 ## Instalación en Canvas
 
-El procedimiento completo —las dos Developer Keys y por qué hacen falta ambas, los scopes,
-el identificador de despliegue, TLS en el origen, Cloudflare y cómo deshacerlo todo— está en
-**[`docs/installation/canvas-self-hosted.md`](docs/installation/canvas-self-hosted.md)**.
-
-En corto: crea una LTI Key a partir de
+Este repositorio no publica una guía de instalación paso a paso completa. En corto: crea una
+LTI Key a partir de
 [`config/canvas-lti.example.json`](config/canvas-lti.example.json), crea una API Key con
 _Enforce Scopes_ y dos scopes de solo lectura, instala la app por client id y pon el
 identificador de despliegue en `.env`.
 
 ## Seguridad y privacidad
 
-Ambas están documentadas, no afirmadas:
-[`docs/security/threat-model.md`](docs/security/threat-model.md) enumera cada amenaza con el
-control que la atiende y la prueba que lo demuestra;
-[`docs/security/privacy.md`](docs/security/privacy.md) dice exactamente qué se guarda.
-
-Lo que conviene saber antes de instalar:
+Ambas se sostienen con pruebas automatizadas, no solo se afirman. Lo que conviene saber
+antes de instalar:
 
 - **Canvas se lee como el usuario, nunca como administrador.** Canvas reevalúa sus permisos
   en cada petición; esta herramienta no los reimplementa.
@@ -169,14 +159,13 @@ Dichas con claridad, porque descubrirlas después de instalar es peor:
 - **No edita.** Es un visor, y no solicita ningún permiso de escritura.
 - **Sin Mermaid, sin KaTeX, sin JavaScript procedente de los documentos.** Cada uno
   necesitaría su propia revisión de seguridad; están en la hoja de ruta, no en el producto.
-- **Aún no verificado contra un Canvas real.** Ver [Estado](#estado).
 
 ## Hoja de ruta
 
-[`docs/roadmap.md`](docs/roadmap.md). En resumen: completar la verificación contra un Canvas
-real y, después, índice de contenidos, enlaces permanentes a secciones y una propuesta a
-Canvas para que un lanzamiento desde `file_menu` pueda identificar su archivo de forma
-segura.
+Lo siguiente: un índice de contenidos navegable para documentos largos, enlaces permanentes
+a secciones, y una propuesta a Canvas para que un lanzamiento desde `file_menu` pueda
+identificar su archivo de forma segura. Sigue el avance en los
+[issues](https://github.com/ATuManera/canvas-markdown-viewer-lti/issues) de este repositorio.
 
 ## Contribuir
 
