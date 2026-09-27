@@ -132,6 +132,71 @@ describe('security headers', () => {
       "img-src 'self' data: https:",
     );
   });
+
+  describe('form-action', () => {
+    function formActionTokens(policy: string): string[] {
+      const match = /form-action ([^;]+)/.exec(policy);
+      if (!match) throw new Error('policy has no form-action directive');
+      return match[1]!.split(' ');
+    }
+
+    it('allows the OAuth2 redirect back to the configured Canvas authorization endpoint', () => {
+      const policy = contentSecurityPolicy([platform]);
+      expect(formActionTokens(policy)).toEqual(["'self'", 'https://canvas.test.edu']);
+    });
+
+    it('falls back to self alone when no platform is configured', () => {
+      expect(contentSecurityPolicy([])).toContain("form-action 'self'");
+    });
+
+    it('never emits a wildcard', () => {
+      expect(contentSecurityPolicy([platform])).not.toMatch(/form-action[^;]*\*/);
+    });
+
+    it('deduplicates and sorts multiple authorization origins', () => {
+      const second = buildPlatform({
+        issuer: 'https://canvas-b.test.edu',
+        clientId: 'client-b',
+        authorizationEndpoint: 'https://canvas-b.test.edu/api/lti/authorize_redirect',
+        jwksUri: 'https://canvas-b.test.edu/api/lti/security/jwks',
+      });
+      // Same origin as `platform`, different path: must not add a second entry.
+      const duplicateOrigin = buildPlatform({
+        authorizationEndpoint: 'https://canvas.test.edu/other/authorize',
+      });
+
+      const policy = contentSecurityPolicy([platform, second, duplicateOrigin]);
+
+      expect(formActionTokens(policy)).toEqual([
+        "'self'",
+        'https://canvas-b.test.edu',
+        'https://canvas.test.edu',
+      ]);
+    });
+
+    it('ignores a non-https authorization endpoint rather than widening the policy', () => {
+      const insecure = buildPlatform({
+        issuer: 'https://canvas-c.test.edu',
+        clientId: 'client-c',
+        authorizationEndpoint: 'http://localhost/api/lti/authorize_redirect',
+        jwksUri: 'https://canvas-c.test.edu/api/lti/security/jwks',
+      });
+
+      const policy = contentSecurityPolicy([insecure]);
+
+      expect(formActionTokens(policy)).toEqual(["'self'"]);
+    });
+
+    it('leaves the rest of the policy untouched', () => {
+      const policy = contentSecurityPolicy([platform]);
+      expect(policy).toContain('frame-ancestors https://canvas.test.edu');
+      expect(policy).toContain("default-src 'none'");
+      expect(policy).toContain("script-src 'self'");
+      expect(policy).toContain("style-src 'self'");
+      expect(policy).toContain("object-src 'none'");
+      expect(policy).toContain("base-uri 'none'");
+    });
+  });
 });
 
 suite('health', () => {

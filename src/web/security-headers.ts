@@ -9,6 +9,12 @@ import type { Platform } from '../config/platforms.ts';
  *
  * `frame-ancestors` is derived from the configured platforms rather than being a wildcard,
  * so an institution that installs the tool gets an allowlist of exactly its own Canvas.
+ *
+ * `form-action` is derived the same way from each platform's `authorizationEndpoint`.
+ * Chrome enforces `form-action` against the whole redirect chain that follows a form
+ * submission, not just the form's own `action` attribute: `/app/authorize` submits to
+ * itself and answers with a redirect to the platform's authorization endpoint, so that
+ * origin must be allowed here or the browser blocks its own 303.
  */
 
 export interface CspOptions {
@@ -46,6 +52,27 @@ export function frameAncestorsFor(
   return [...origins].sort();
 }
 
+/**
+ * Origins the OAuth2 authorization form may redirect to, beyond this tool itself: the
+ * `authorizationEndpoint` of every configured platform, as an https origin only. Only
+ * `URL.origin` is used (no path, no wildcard), and anything that isn't a valid https URL
+ * is dropped rather than widening the policy.
+ */
+export function formActionOriginsFor(platforms: readonly Platform[]): string[] {
+  const origins = new Set<string>();
+
+  for (const platform of platforms) {
+    try {
+      const url = new URL(platform.authorizationEndpoint);
+      if (url.protocol === 'https:') origins.add(url.origin);
+    } catch {
+      // Invalid values are dropped, never allowed through.
+    }
+  }
+
+  return [...origins].sort();
+}
+
 export function contentSecurityPolicy(
   platforms: readonly Platform[],
   options: CspOptions = {},
@@ -53,6 +80,7 @@ export function contentSecurityPolicy(
   const ancestors = frameAncestorsFor(platforms, options.extraFrameAncestors);
   const script = options.scriptNonce ? `'self' 'nonce-${options.scriptNonce}'` : "'self'";
   const img = options.allowExternalImages ? "'self' data: https:" : "'self' data:";
+  const formAction = ["'self'", ...formActionOriginsFor(platforms)].join(' ');
 
   return [
     "default-src 'none'",
@@ -61,7 +89,7 @@ export function contentSecurityPolicy(
     `img-src ${img}`,
     "font-src 'self'",
     "connect-src 'self'",
-    "form-action 'self'",
+    `form-action ${formAction}`,
     "base-uri 'none'",
     "object-src 'none'",
     `frame-ancestors ${ancestors.length > 0 ? ancestors.join(' ') : "'none'"}`,
