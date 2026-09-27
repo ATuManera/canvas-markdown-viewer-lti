@@ -20,6 +20,12 @@ opens the document, rendered and readable, inside Canvas.
 It is a standard LTI 1.3 tool. It does not modify Canvas, does not require a fork, and does
 not depend on the Canvas theme's JavaScript.
 
+**Author / Autor:** A Tu Manera Digital — Fernando Gallarday ([@fgallarday](https://github.com/fgallarday))
+
+**AI Assistance / Asistencia de IA:** Developed with the support of GPT 5.6 Sol, Claude Opus 5, and Claude Sonnet 5.
+
+**Version / Versión:** 0.1.0
+
 ## What it looks like
 
 No screenshot yet. This project has not been verified against a live Canvas installation, so

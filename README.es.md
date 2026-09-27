@@ -20,6 +20,12 @@ documento se abre renderizado y legible dentro de Canvas.
 Es una herramienta LTI 1.3 estándar. No modifica Canvas, no necesita un fork y no depende
 del JavaScript del tema de Canvas.
 
+**Author / Autor:** A Tu Manera Digital — Fernando Gallarday ([@fgallarday](https://github.com/fgallarday))
+
+**AI Assistance / Asistencia de IA:** Developed with the support of GPT 5.6 Sol, Claude Opus 5, and Claude Sonnet 5.
+
+**Version / Versión:** 0.1.0
+
 ## Qué aspecto tiene
 
 Todavía no hay captura. Este proyecto no se ha verificado contra una instalación real de

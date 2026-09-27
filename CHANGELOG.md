@@ -6,11 +6,20 @@ Notable changes to this project. The format follows
 
 ## [Unreleased]
 
-Nothing released yet. The first release will be cut once the tool has been verified against
-a live Canvas installation; see `docs/roadmap.md`.
+## [0.1.0] - 2026-09-26
+
+First release. LTI 1.3 launch, OAuth2 with Canvas, and the Markdown viewer have been
+verified end to end against a live Canvas installation.
 
 ### Fixed
 
+- `form-action` in the Content-Security-Policy only allowed `'self'`, but Chrome enforces
+  `form-action` across the whole redirect chain that follows a form submission, not just
+  the form's own `action` attribute. `/app/authorize` submits to itself and then answers
+  with a redirect to the platform's `authorizationEndpoint`, so Canvas's OAuth2 authorize
+  page was being blocked. `form-action` now also allows the https origin of every
+  configured platform's `authorizationEndpoint`, derived the same way `frame-ancestors`
+  already is, with no platform hardcoded.
 - The OAuth2 request asked for a third scope,
   `url:GET|/courses/:course_id/files/:id/download`, which does not exist: Canvas publishes
   scopes for `/api/v1` and `/api/sis` routes only. It was inferred from a wider filter on
