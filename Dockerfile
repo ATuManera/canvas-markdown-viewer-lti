@@ -3,7 +3,7 @@
 # ---------------------------------------------------------------------------
 # Build stage: full toolchain, never shipped.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 
 WORKDIR /app
 
@@ -22,7 +22,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # ---------------------------------------------------------------------------
 # Runtime stage.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 
 # dumb-init reaps zombies and forwards signals, so SIGTERM reaches Node and the
 # shutdown handler runs instead of the container being killed.
