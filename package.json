@@ -30,11 +30,11 @@
     "licenses": "node scripts/licenses.mjs"
   },
   "dependencies": {
-    "@fastify/cookie": "^11.1.2",
-    "@fastify/formbody": "^9.0.0",
-    "@fastify/helmet": "^13.1.1",
-    "@fastify/rate-limit": "^11.2.0",
-    "@fastify/static": "^10.1.4",
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/formbody": "^9.0.1",
+    "@fastify/helmet": "^13.1.2",
+    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.6",
     "fastify": "^5.12.5",
     "highlight.js": "^11.12.0",
     "isomorphic-dompurify": "^4.3.0",
